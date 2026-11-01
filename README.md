@@ -1,6 +1,7 @@
 # 🗺️ NorvinskMaps
 
-Интерактивная карта для **SPT (Single Player Tarkov)** 5.0+ — замена ванильному экрану карты с поддержкой множества функций.
+Интерактивная карта для **SPT 5.0+** — замена ванильному экрану карты с поддержкой множества функций.
+Полностью на русском языке
 
 ![SPT](https://img.shields.io/badge/SPT-5.0.0-blue?style=flat-square)
 ![EFT](https://img.shields.io/badge/EFT-1.1.5.1.47510-lightgrey?style=flat-square)
