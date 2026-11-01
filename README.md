@@ -1,8 +1,5 @@
 # 🗺️ NorvinskMaps
 
-Интерактивная карта для **SPT 5.0+** — замена ванильному экрану карты с поддержкой множества функций.
-Полностью на русском языке
-
 ![SPT](https://img.shields.io/badge/SPT-5.0.0-blue?style=flat-square)
 ![EFT](https://img.shields.io/badge/EFT-1.1.5.1.47510-lightgrey?style=flat-square)
 ![BepInEx](https://img.shields.io/badge/BepInEx-6.0.0--be.788-orange?style=flat-square)
@@ -10,6 +7,9 @@
 ![.NET](https://img.shields.io/badge/.NET-6.0-512BD4?style=flat-square)
 ![License](https://img.shields.io/badge/License-Custom%20%2F%20SPT--only-red?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Working-brightgreen?style=flat-square)
+
+Интерактивная карта для **SPT 5.0+** — замена ванильному экрану карты с поддержкой множества функций.
+Полностью на русском языке
 
 ---
 
