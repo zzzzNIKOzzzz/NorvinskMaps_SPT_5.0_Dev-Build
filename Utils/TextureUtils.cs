@@ -14,18 +14,29 @@ namespace NorvinskMaps.Utils
                 return null;
 
             var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-            tex.LoadImage(File.ReadAllBytes(absolutePath));
+            if (!tex.LoadImage(File.ReadAllBytes(absolutePath)))
+            {
+                Object.Destroy(tex);
+                return null;
+            }
             return tex;
         }
 
         public static Sprite GetOrLoadCachedSprite(string path)
         {
             if (_spriteCache.TryGetValue(path, out var sprite))
-                return sprite;
+            {
+                if (sprite != null && sprite.texture != null)
+                {
+                    return sprite;
+                }
+
+                _spriteCache.Remove(path);
+            }
 
             var absolutePath = Path.Combine(NorvinskMapsPlugin.Path, path);
             var texture = LoadTexture2DFromPath(absolutePath);
-            
+
             if (texture == null)
             {
                 NorvinskMapsPlugin.Log.LogWarning($"[TextureUtils] failed to load: {absolutePath}");
@@ -35,10 +46,15 @@ namespace NorvinskMaps.Utils
             sprite = Sprite.Create(
                 texture,
                 new Rect(0f, 0f, texture.width, texture.height),
-                new Vector2(0.5f, 0.5f)); // 0.5f, 0.5f — это центр, а не пиксели!
+                new Vector2(0.5f, 0.5f));
 
             _spriteCache[path] = sprite;
             return sprite;
+        }
+
+        public static void ClearCache()
+        {
+            _spriteCache.Clear();
         }
     }
 }

@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using Comfort.Common;
 using NorvinskMaps.Data;
@@ -29,6 +30,70 @@ namespace NorvinskMaps.Utils
         private static float _zonePositionCacheBuiltAt = float.NegativeInfinity;
         private static readonly HashSet<string> _warnedMissingZone = new HashSet<string>();
         private static readonly HashSet<string> _dumpedFieldSets = new HashSet<string>();
+        // Кэш reflection для поля/свойства статуса квеста — ищем один раз за процесс
+        private static FieldInfo _cachedQuestStatusField;
+        private static PropertyInfo _cachedQuestStatusProp;
+        private static bool _questStatusLookupTried = false;
+
+        private static bool TryGetQuestStatus(Quest quest, out EQuestStatus status)
+        {
+            status = default(EQuestStatus);
+
+            if (!_questStatusLookupTried)
+            {
+                _questStatusLookupTried = true;
+                var type = quest.GetType();
+
+                foreach (var name in new[] { "Status", "QuestStatus", "_status", "state", "_state" })
+                {
+                    try
+                    {
+                        var prop = type.GetProperty(name,
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (prop != null && prop.PropertyType == typeof(EQuestStatus))
+                        {
+                            _cachedQuestStatusProp = prop;
+                            break;
+                        }
+                    }
+                    catch { }
+
+                    try
+                    {
+                        var field = type.GetField(name,
+                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (field != null && field.FieldType == typeof(EQuestStatus))
+                        {
+                            _cachedQuestStatusField = field;
+                            break;
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            if (_cachedQuestStatusProp != null)
+            {
+                try
+                {
+                    status = (EQuestStatus)_cachedQuestStatusProp.GetValue(quest);
+                    return true;
+                }
+                catch { }
+            }
+
+            if (_cachedQuestStatusField != null)
+            {
+                try
+                {
+                    status = (EQuestStatus)_cachedQuestStatusField.GetValue(quest);
+                    return true;
+                }
+                catch { }
+            }
+
+            return false;
+        }
 
         internal static void TryCaptureQuestData()
         {
@@ -140,7 +205,7 @@ namespace NorvinskMaps.Utils
             {
                 NorvinskMapsPlugin.Log.LogWarning(
                     $"TriggersWithIds null: {TriggersWithIds == null} or QuestItems null: {QuestItems == null}");
-                return null;
+                return System.Linq.Enumerable.Empty<MapMarkerDef>();
             }
 
             var markers = new List<MapMarkerDef>();
@@ -197,120 +262,120 @@ namespace NorvinskMaps.Utils
             switch (typeName)
             {
                 case "ConditionCounterCreator":
-                {
-                    var counter = new ConditionCounterCreator(condition.Pointer);
-                    foreach (var pos in GetPositionsForConditionCreator(counter, questName, conditionDescription))
-                        yield return pos;
-                    yield break;
-                }
+                    {
+                        var counter = new ConditionCounterCreator(condition.Pointer);
+                        foreach (var pos in GetPositionsForConditionCreator(counter, questName, conditionDescription))
+                            yield return pos;
+                        yield break;
+                    }
 
                 case "ConditionZone":
-                {
-                    var zoneCondition = new ConditionZone(condition.Pointer);
-                    var zoneIds = zoneCondition.zoneIds;
-                    if (zoneIds != null)
                     {
-                        foreach (var zoneId in zoneIds)
+                        var zoneCondition = new ConditionZone(condition.Pointer);
+                        var zoneIds = zoneCondition.zoneIds;
+                        if (zoneIds != null)
                         {
-                            var idStr = ExtractMongoIdString(zoneId);
-                            if (string.IsNullOrEmpty(idStr)) continue;
-                            foreach (var pos in GetPositionsForZoneId(idStr, questName, conditionDescription))
-                                yield return pos;
+                            foreach (var zoneId in zoneIds)
+                            {
+                                var idStr = ExtractMongoIdString(zoneId);
+                                if (string.IsNullOrEmpty(idStr)) continue;
+                                foreach (var pos in GetPositionsForZoneId(idStr, questName, conditionDescription))
+                                    yield return pos;
+                            }
                         }
+                        yield break;
                     }
-                    yield break;
-                }
 
                 case "ConditionLaunchFlare":
-                {
-                    var flare = new ConditionLaunchFlare(condition.Pointer);
-                    var zoneId = flare.zoneID;
-                    if (!string.IsNullOrEmpty(zoneId))
                     {
-                        foreach (var pos in GetPositionsForZoneId(zoneId, questName, conditionDescription))
-                            yield return pos;
-                    }
-                    yield break;
-                }
-
-                case "ConditionVisitPlace":
-                {
-                    var place = new ConditionVisitPlace(condition.Pointer);
-                    var zoneId = ExtractMongoIdString(place.target);
-                    if (!string.IsNullOrEmpty(zoneId))
-                    {
-                        foreach (var pos in GetPositionsForZoneId(zoneId, questName, conditionDescription))
-                            yield return pos;
-                    }
-                    else
-                    {
-                        WarnMissingZone(typeName, condition);
-                    }
-                    yield break;
-                }
-
-                case "ConditionInZone":
-                {
-                    var inZone = new ConditionInZone(condition.Pointer);
-                    var zoneIds = inZone.zoneIds;
-                    if (zoneIds != null)
-                    {
-                        foreach (var zoneId in zoneIds)
+                        var flare = new ConditionLaunchFlare(condition.Pointer);
+                        var zoneId = flare.zoneID;
+                        if (!string.IsNullOrEmpty(zoneId))
                         {
-                            var idStr = ExtractMongoIdString(zoneId);
-                            if (string.IsNullOrEmpty(idStr)) continue;
-                            foreach (var pos in GetPositionsForZoneId(idStr, questName, conditionDescription))
+                            foreach (var pos in GetPositionsForZoneId(zoneId, questName, conditionDescription))
                                 yield return pos;
                         }
+                        yield break;
                     }
-                    yield break;
-                }
+
+                case "ConditionVisitPlace":
+                    {
+                        var place = new ConditionVisitPlace(condition.Pointer);
+                        var zoneId = ExtractMongoIdString(place.target);
+                        if (!string.IsNullOrEmpty(zoneId))
+                        {
+                            foreach (var pos in GetPositionsForZoneId(zoneId, questName, conditionDescription))
+                                yield return pos;
+                        }
+                        else
+                        {
+                            WarnMissingZone(typeName, condition);
+                        }
+                        yield break;
+                    }
+
+                case "ConditionInZone":
+                    {
+                        var inZone = new ConditionInZone(condition.Pointer);
+                        var zoneIds = inZone.zoneIds;
+                        if (zoneIds != null)
+                        {
+                            foreach (var zoneId in zoneIds)
+                            {
+                                var idStr = ExtractMongoIdString(zoneId);
+                                if (string.IsNullOrEmpty(idStr)) continue;
+                                foreach (var pos in GetPositionsForZoneId(idStr, questName, conditionDescription))
+                                    yield return pos;
+                            }
+                        }
+                        yield break;
+                    }
 
                 case "ConditionFindItem":
-                {
-                    var findItem = new ConditionFindItem(condition.Pointer);
-                    var targets = findItem.target;
-                    if (targets != null)
                     {
-                        foreach (var pos in GetPositionsForQuestItems(targets, questName, conditionDescription))
-                            yield return pos;
+                        var findItem = new ConditionFindItem(condition.Pointer);
+                        var targets = findItem.target;
+                        if (targets != null)
+                        {
+                            foreach (var pos in GetPositionsForQuestItems(targets, questName, conditionDescription))
+                                yield return pos;
+                        }
+                        yield break;
                     }
-                    yield break;
-                }
 
                 case "ConditionExitName":
-                {
-                    var exitName = new ConditionExitName(condition.Pointer);
-                    var exfils = Singleton<GameWorld>.Instance?.ExfiltrationController?.ExfiltrationPoints;
-                    if (exfils != null)
                     {
-                        var specifiedExit = exfils.FirstOrDefault(e => e.Settings.Name == exitName.exitName);
-                        if (specifiedExit != null)
-                            yield return MathUtils.ConvertToMapPosition(specifiedExit.transform);
+                        var exitName = new ConditionExitName(condition.Pointer);
+                        var exfils = Singleton<GameWorld>.Instance?.ExfiltrationController?.ExfiltrationPoints;
+                        if (exfils != null)
+                        {
+                            var specifiedExit = exfils.FirstOrDefault(e => e.Settings.Name == exitName.exitName);
+                            if (specifiedExit != null)
+                                yield return MathUtils.ConvertToMapPosition(specifiedExit.transform);
+                        }
+                        yield break;
                     }
-                    yield break;
-                }
 
                 case "ConditionLocation":
-                {
-                    yield break;
-                }
+                    {
+                        yield break;
+                    }
 
                 case "ConditionPlaceBeacon":
                 case "ConditionLeaveItemAtLocation":
-                {
-                    var zoneIds = GetZoneIdsViaConditionZoneWrapper(condition);
-                    if (zoneIds != null && zoneIds.Count > 0)
                     {
-                        foreach (var zid in zoneIds)
+                        var zoneIds = GetZoneIdsViaConditionZoneWrapper(condition);
+                        if (zoneIds != null && zoneIds.Count > 0)
                         {
-                            if (string.IsNullOrEmpty(zid)) continue;
-                            foreach (var pos in GetPositionsForZoneId(zid, questName, conditionDescription))
-                                yield return pos;
+                            foreach (var zid in zoneIds)
+                            {
+                                if (string.IsNullOrEmpty(zid)) continue;
+                                foreach (var pos in GetPositionsForZoneId(zid, questName, conditionDescription))
+                                    yield return pos;
+                            }
                         }
+                        yield break;
                     }
-                    yield break;
-                }
 
                 default:
                     yield break;
@@ -486,36 +551,14 @@ namespace NorvinskMaps.Utils
                 }
 
                 if (quest == null) continue;
-
                 if (quest.Template?.Conditions == null) continue;
 
-                EQuestStatus status = default(EQuestStatus);
-                bool got = false;
-
-                foreach (var name in new[] { "Status", "QuestStatus", "_status", "state", "_state" })
+                // Быстрая проверка статуса через кэшированный reflection
+                if (TryGetQuestStatus(quest, out var status))
                 {
-                    try
-                    {
-                        var t = Traverse.Create(quest);
-                        if (t.Property(name).PropertyExists())
-                        {
-                            status = t.Property(name).GetValue<EQuestStatus>();
-                            got = true;
-                            break;
-                        }
-                        if (t.Field(name).FieldExists())
-                        {
-                            status = t.Field(name).GetValue<EQuestStatus>();
-                            got = true;
-                            break;
-                        }
-                    }
-                    catch { }
+                    if (status != EQuestStatus.Started) continue;
                 }
-
-                if (got && status != EQuestStatus.Started) continue;
-
-                if (!got)
+                else
                 {
                     var tpl = quest.Template.Conditions;
                     if (!tpl.ContainsKey(EQuestStatus.Started) &&

@@ -13,6 +13,36 @@ namespace NorvinskMaps.Utils
     public static class GameUtils
     {
         public static Profile PlayerProfile => GetMainPlayer()?.Profile;
+        private static int _cachedIntelLevel = -1;
+        private static float _intelCacheTime = -1f;
+
+        public static int GetIntelLevel()
+        {
+            var now = UnityEngine.Time.realtimeSinceStartup;
+            if (_cachedIntelLevel >= 0 && now - _intelCacheTime < 5f)
+                return _cachedIntelLevel;
+
+            var profile = PlayerProfile;
+            if (profile == null)
+            {
+                _cachedIntelLevel = 0;
+                _intelCacheTime = now;
+                return 0;
+            }
+
+            var areas = profile.Hideout?.Areas;
+            if (areas == null)
+            {
+                _cachedIntelLevel = 0;
+                _intelCacheTime = now;
+                return 0;
+            }
+
+            var intelArea = areas.SingleOrDefault(a => a.AreaType == EAreaType.IntelligenceCenter);
+            _cachedIntelLevel = intelArea?.Level ?? 0;
+            _intelCacheTime = now;
+            return _cachedIntelLevel;
+        }
 
         private static readonly HashSet<WildSpawnType> _trackedBosses = new HashSet<WildSpawnType>
         {
@@ -242,18 +272,6 @@ namespace NorvinskMaps.Utils
         public static bool IsHeadlessClient(this IPlayer player)
         {
             return player.Profile.Info.MemberCategory == EMemberCategory.UnitTest;
-        }
-
-        public static int GetIntelLevel()
-        {
-            var profile = PlayerProfile;
-            if (profile == null) return 0;
-
-            var areas = profile.Hideout?.Areas;
-            if (areas == null) return 0;
-
-            var intelArea = areas.SingleOrDefault(a => a.AreaType == EAreaType.IntelligenceCenter);
-            return intelArea?.Level ?? 0;
         }
 
         public static MongoID[] GetWishListItems()
