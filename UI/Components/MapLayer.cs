@@ -98,7 +98,6 @@ namespace NorvinskMaps.UI.Components
             }
             else
             {
-                // Мягкий лог — спрайт может догрузиться через пару кадров
                 NorvinskMapsPlugin.Log.LogDebug(
                     $"[MapLayer] Sprite not yet available for '{name}', scheduling retry");
                 layer.StartSpriteRetry();
@@ -107,7 +106,6 @@ namespace NorvinskMaps.UI.Components
             return layer;
         }
 
-        // Запуск серии повторных попыток через Invoke (IL2CPP-совместимо).
         private void StartSpriteRetry()
         {
             _retryAttempt = 0;
@@ -115,7 +113,6 @@ namespace NorvinskMaps.UI.Components
             Invoke(nameof(TryLoadSpriteOnce), RetryDelay);
         }
 
-        // Одна попытка получить спрайт из кэша. Если не удалось — Invoke ещё раз.
         private void TryLoadSpriteOnce()
         {
             if (this == null || _image == null) return;
