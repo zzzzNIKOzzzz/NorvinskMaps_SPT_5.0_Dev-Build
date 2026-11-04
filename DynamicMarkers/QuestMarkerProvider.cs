@@ -19,8 +19,6 @@ namespace NorvinskMaps
             {
                 return;
             }
-
-            AddQuestObjectiveMarkers(map);
         }
 
         public void OnHideInRaid(MapView map)
@@ -36,9 +34,6 @@ namespace NorvinskMaps
             {
                 return;
             }
-
-            TryRemoveMarkers();
-            AddQuestObjectiveMarkers(map);
         }
 
         public void OnRaidEnd(MapView map)
@@ -59,27 +54,34 @@ namespace NorvinskMaps
             if (_lastMapView == null) return;
             if (GameUtils.IsScavRaid()) return;
 
-            TryRemoveMarkers();
-            AddQuestObjectiveMarkers(_lastMapView);
-        }
+            var player = GameUtils.GetMainPlayer();
+            if (player == null) return;
 
-        private void AddQuestObjectiveMarkers(MapView map)
-        {
             QuestUtils.TryCaptureQuestData();
 
-            var player = GameUtils.GetMainPlayer();
-            if (player == null)
+            var markerDefs = QuestUtils.GetMarkerDefsForPlayer(player);
+            if (markerDefs == null)
             {
                 return;
             }
 
-            var markerDefs = QuestUtils.GetMarkerDefsForPlayer(player);
-
+            var newMarkers = new List<MapMarker>();
             foreach (var markerDef in markerDefs)
             {
-                var marker = map.AddMapMarker(markerDef);
-                _questMarkers.Add(marker);
+                try
+                {
+                    var marker = _lastMapView.AddMapMarker(markerDef);
+                    if (marker != null)
+                        newMarkers.Add(marker);
+                }
+                catch (System.Exception e)
+                {
+                    NorvinskMapsPlugin.Log.LogWarning($"[QuestMarkerProvider] AddMapMarker: {e.Message}");
+                }
             }
+
+            TryRemoveMarkers();
+            _questMarkers = newMarkers;
         }
 
         private void TryRemoveMarkers()

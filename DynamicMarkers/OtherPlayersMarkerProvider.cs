@@ -150,8 +150,6 @@ namespace NorvinskMaps.DynamicMarkers
 
         private void RemoveNonActivePlayers()
         {
-            // ВАЖНО: Не используем AllAlivePlayersList для проверки, так как в IL2CPP он может временно очищаться.
-            // Удаляем маркер только если игрок реально мёртв или его объект уничтожен.
             foreach (var kvp in _playerMarkers.ToList())
             {
                 var playerId = kvp.Key;
@@ -160,8 +158,7 @@ namespace NorvinskMaps.DynamicMarkers
                 bool shouldRemove = false;
                 try
                 {
-                    // Проверка на уничтоженный объект (IL2CPP)
-                    if (player == null || player.WasCollected)
+                    if (player == null)
                     {
                         shouldRemove = true;
                     }
@@ -172,7 +169,6 @@ namespace NorvinskMaps.DynamicMarkers
                 }
                 catch
                 {
-                    // Если при обращении к player вылетело исключение — объект уничтожен
                     shouldRemove = true;
                 }
 
