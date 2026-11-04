@@ -31,7 +31,7 @@ namespace NorvinskMaps.UI.Components
                 {
                     if (gameObject == null)
                         return null;
-						_rectTransform = gameObject.GetComponent<RectTransform>();
+                    _rectTransform = gameObject.GetComponent<RectTransform>();
                 }
                 return _rectTransform;
             }
@@ -80,17 +80,17 @@ namespace NorvinskMaps.UI.Components
                 go.AddComponent<RectTransform>();
             }
 
-			var existingImage = go.GetComponent<UnityEngine.UI.Image>();
-			if (existingImage == null)
-			{
-			    var img = go.AddComponent<UnityEngine.UI.Image>();
-			    img.color = new Color(0f, 0f, 0f, 0f);
-			    img.raycastTarget = false;
-			}
-			else
-			{
-				existingImage.raycastTarget = false;
-			}
+            var existingImage = go.GetComponent<UnityEngine.UI.Image>();
+            if (existingImage == null)
+            {
+                var img = go.AddComponent<UnityEngine.UI.Image>();
+                img.color = new Color(0f, 0f, 0f, 0f);
+                img.raycastTarget = false;
+            }
+            else
+            {
+                existingImage.raycastTarget = false;
+            }
 
             var view = go.AddComponent<MapView>();
             if (view == null)
@@ -179,8 +179,8 @@ namespace NorvinskMaps.UI.Components
             }
         }
 
-		[HideFromIl2Cpp]
-		public bool IsDragging { get; set; } = false;
+        [HideFromIl2Cpp]
+        public bool IsDragging { get; set; } = false;
 
         [HideFromIl2Cpp]
         public void AddMapMarker(MapMarker marker)
@@ -430,6 +430,7 @@ namespace NorvinskMaps.UI.Components
 
             _immediateMapAnchor = Vector2.zero;
             CurrentMapDef = null;
+            TextureUtils.ClearCache();
         }
 
         public void SelectTopLevel(int level)
@@ -494,21 +495,21 @@ namespace NorvinskMaps.UI.Components
         }
 
         public void SetMinMaxZoom(RectTransform parentTransform, bool centerOnMap = true)
-		{
-						if (RectTransform == null || parentTransform == null || CurrentMapDef == null) return;
+        {
+            if (RectTransform == null || parentTransform == null || CurrentMapDef == null) return;
 
-			var mapSize = GetBaseMapSize();
-			if (mapSize.x <= 0f || mapSize.y <= 0f)
-			{
-				NorvinskMapsPlugin.Log.LogWarning($"[MapView.SetMinMaxZoom] mapSize is invalid: {mapSize}");
-				return;
-			}
+            var mapSize = GetBaseMapSize();
+            if (mapSize.x <= 0f || mapSize.y <= 0f)
+            {
+                NorvinskMapsPlugin.Log.LogWarning($"[MapView.SetMinMaxZoom] mapSize is invalid: {mapSize}");
+                return;
+            }
 
-			const float RefWidth = 1920f;
-			const float RefHeight = 1080f;
+            const float RefWidth = 1920f;
+            const float RefHeight = 1080f;
 
-			ZoomMin = Mathf.Min(RefWidth / mapSize.x, RefHeight / mapSize.y) / _zoomMinScaler;
-			ZoomMax = _zoomMaxScaler * ZoomMin;
+            ZoomMin = Mathf.Min(RefWidth / mapSize.x, RefHeight / mapSize.y) / _zoomMinScaler;
+            ZoomMax = _zoomMaxScaler * ZoomMin;
 
             ZoomMain = ZoomMin;
             ZoomMini = NormalizedToActual(Settings.ZoomMiniMap.Value);
@@ -618,14 +619,14 @@ namespace NorvinskMaps.UI.Components
             }
         }
 
-		[HideFromIl2Cpp]
-		public void ApplyZoomExternal(float zoom)
-		{
-		    if (RectTransform == null) return;
-		    zoom = Mathf.Clamp(zoom, ZoomMin, ZoomMax);
-		    ApplyZoom(zoom, 0f);
-		}
-		
+        [HideFromIl2Cpp]
+        public void ApplyZoomExternal(float zoom)
+        {
+            if (RectTransform == null) return;
+            zoom = Mathf.Clamp(zoom, ZoomMin, ZoomMax);
+            ApplyZoom(zoom, 0f);
+        }
+
         private void HandleZoomMainChanged(float normalized)
         {
             var actual = NormalizedToActual(normalized);

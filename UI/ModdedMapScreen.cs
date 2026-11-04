@@ -101,8 +101,16 @@ namespace NorvinskMaps.UI
         private bool _firstFullscreenShown = false;
         private bool _pendingFullscreenRecalc = false;
         private float _updateLogTimer = 1f;
-        private float _dynamicMarkerRefreshTimer = 1f;
-        private const float DynamicMarkerRefreshInterval = 1f;
+        private float _otherPlayersRefreshTimer = 1f;
+        private float _corpseRefreshTimer = 5f;
+        private bool _questMarkersDirty = false;
+        private float _questMarkersDirtyCooldown = 0f;
+        private const float QuestMarkersMinInterval = 2f;
+        [HideFromIl2Cpp]
+        public void MarkQuestMarkersDirty()
+        {
+            _questMarkersDirty = true;
+        }
 
         private float _centeringZoomResetPoint = 0f;
         private KeyboardShortcut _centerPlayerShortcut;
@@ -145,8 +153,6 @@ namespace NorvinskMaps.UI
 
         private void Awake()
         {
-            // ФИКС DOTWEEN: увеличиваем пул твинов заранее, чтобы не было
-            // авто-ресайза из 512/50 в 1280/50 (и выше) в рантайме.
             try { DG.Tweening.DOTween.SetTweensCapacity(2000, 200); }
             catch (Exception e) { NorvinskMapsPlugin.Log.LogDebug($"[Awake] DOTween capacity: {e.Message}"); }
 
@@ -410,11 +416,18 @@ namespace NorvinskMaps.UI
 
             TryRecalcAfterParentActivates();
 
-            _dynamicMarkerRefreshTimer -= Time.deltaTime;
-            if (_dynamicMarkerRefreshTimer <= 0f)
+            _otherPlayersRefreshTimer -= Time.deltaTime;
+            if (_otherPlayersRefreshTimer <= 0f)
             {
-                _dynamicMarkerRefreshTimer = DynamicMarkerRefreshInterval;
-                TryRefreshDynamicMarkers();
+                _otherPlayersRefreshTimer = 1f;
+                TryRefreshOtherPlayers();
+            }
+
+            _corpseRefreshTimer -= Time.deltaTime;
+            if (_corpseRefreshTimer <= 0f)
+            {
+                _corpseRefreshTimer = 5f;
+                TryRefreshCorpseMarkers();
             }
 
             _updateLogTimer -= Time.deltaTime;
@@ -540,30 +553,10 @@ namespace NorvinskMaps.UI
         }
 
         [HideFromIl2Cpp]
-        private void TryRefreshDynamicMarkers()
+        private void TryRefreshOtherPlayers()
         {
             if (!IsActuallyInRaid()) return;
             if (_mapView == null) return;
-
-            try
-            {
-                var q = GetMarkerProvider<QuestMarkerProvider>();
-                q?.RefreshMarkers();
-            }
-            catch (Exception e)
-            {
-                NorvinskMapsPlugin.Log.LogError($"[TryRefreshDynamicMarkers] Quest: {e.Message}");
-            }
-
-            try
-            {
-                var c = GetMarkerProvider<CorpseMarkerProvider>();
-                c?.RefreshMarkers();
-            }
-            catch (Exception e)
-            {
-                NorvinskMapsPlugin.Log.LogError($"[TryRefreshDynamicMarkers] Corpse: {e.Message}");
-            }
 
             try
             {
@@ -572,7 +565,40 @@ namespace NorvinskMaps.UI
             }
             catch (Exception e)
             {
-                NorvinskMapsPlugin.Log.LogError($"[TryRefreshDynamicMarkers] OtherPlayers: {e.Message}");
+                NorvinskMapsPlugin.Log.LogError($"[TryRefreshOtherPlayers] {e.Message}");
+            }
+        }
+
+        [HideFromIl2Cpp]
+        private void TryRefreshCorpseMarkers()
+        {
+            if (!IsActuallyInRaid()) return;
+            if (_mapView == null) return;
+
+            try
+            {
+                var c = GetMarkerProvider<CorpseMarkerProvider>();
+                c?.RefreshMarkers();
+            }
+            catch (Exception e)
+            {
+                NorvinskMapsPlugin.Log.LogError($"[TryRefreshCorpseMarkers] {e.Message}");
+            }
+        }
+
+        [HideFromIl2Cpp]
+        private void TryRefreshQuestMarkers()
+        {
+            // === Событийное обновление квестов ===
+            if (_questMarkersDirty && _questMarkersDirtyCooldown <= 0f)
+            {
+                _questMarkersDirty = false;
+                _questMarkersDirtyCooldown = QuestMarkersMinInterval;
+                TryRefreshQuestMarkers();
+            }
+            else if (_questMarkersDirtyCooldown > 0f)
+            {
+                _questMarkersDirtyCooldown -= Time.deltaTime;
             }
         }
 
@@ -1057,7 +1083,6 @@ namespace NorvinskMaps.UI
 
             if (tweenTime <= 0f)
             {
-                // ФИКС DOTWEEN: без анимации — прямое присвоение, твин не создаётся
                 maskRt.sizeDelta = targetSize;
                 maskRt.anchoredPosition = MaskPositionInRaid;
             }
@@ -1116,8 +1141,6 @@ namespace NorvinskMaps.UI
         private void AdjustForMiniMap(bool playAnimation)
         {
             if (_scrollMask == null) return;
-
-            // Здесь tweenTime всегда 0 — анимации нет, значит твины вообще не создаём
             var selfRt = RectTransform;
             selfRt.DOKill(false);
 

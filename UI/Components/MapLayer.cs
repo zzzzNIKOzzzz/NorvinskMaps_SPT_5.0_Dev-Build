@@ -68,6 +68,8 @@ namespace NorvinskMaps.UI.Components
             var layer = go.AddComponent<MapLayer>();
             layer._name = name;
             layer._def = def;
+            layer._retryAttempt = 0;
+            layer.CancelInvoke(nameof(TryLoadSpriteOnce));
 
             var size = def.ImageBounds.Max - def.ImageBounds.Min;
             var rotatedSize = MathUtils.GetRotatedRectangle(size, degreesRotation);
