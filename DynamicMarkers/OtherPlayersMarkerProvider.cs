@@ -18,66 +18,52 @@ namespace NorvinskMaps.DynamicMarkers
         private const string _starImagePath = "Markers/boss.png";
 
         private const string _friendlyPlayerCategory = "Friendly Player";
-        private const string _friendlyPlayerImagePath = _arrowImagePath;
         private static Color _friendlyPlayerColor = Color.Lerp(Color.blue, Color.white, 0.5f);
-
         private const string _enemyPlayerCategory = "Enemy Player";
-        private const string _enemyPlayerImagePath = _arrowImagePath;
-
         private const string _scavCategory = "Scav";
-        private const string _scavImagePath = _arrowImagePath;
-
         private const string _bossCategory = "Boss";
-        private const string _bossImagePath = _starImagePath;
 
         private const string _pmcBearImagePath = "Markers/pmc_bear.png";
         private const string _pmcUsecImagePath = "Markers/pmc_usec.png";
 
         private bool _showFriendlyPlayers = true;
-        public bool ShowFriendlyPlayers
-        {
-            get => _showFriendlyPlayers;
-            set => HandleSetBoolOption(ref _showFriendlyPlayers, value);
-        }
+        public bool ShowFriendlyPlayers { get => _showFriendlyPlayers; set => HandleSetBoolOption(ref _showFriendlyPlayers, value); }
 
         private bool _showEnemyPlayers = false;
-        public bool ShowEnemyPlayers
-        {
-            get => _showEnemyPlayers;
-            set => HandleSetBoolOption(ref _showEnemyPlayers, value);
-        }
+        public bool ShowEnemyPlayers { get => _showEnemyPlayers; set => HandleSetBoolOption(ref _showEnemyPlayers, value); }
 
         private bool _showScavs = false;
-        public bool ShowScavs
-        {
-            get => _showScavs;
-            set => HandleSetBoolOption(ref _showScavs, value);
-        }
+        public bool ShowScavs { get => _showScavs; set => HandleSetBoolOption(ref _showScavs, value); }
 
         private bool _showBosses = false;
-        public bool ShowBosses
-        {
-            get => _showBosses;
-            set => HandleSetBoolOption(ref _showBosses, value);
-        }
+        public bool ShowBosses { get => _showBosses; set => HandleSetBoolOption(ref _showBosses, value); }
 
         private MapView _lastMapView;
-
-        private Dictionary<string, (Player player, PlayerMapMarker marker)> _playerMarkers = [];
+        private readonly Dictionary<string, (Player player, PlayerMapMarker marker)> _playerMarkers = new();
 
         public void OnShowInRaid(MapView map)
         {
             _lastMapView = map;
+
             TryAddMarkers();
             RemoveNonActivePlayers();
+
+            GameWorldUnregisterPlayerPatch.OnUnregisterPlayer -= OnUnregisterPlayer;
+            GameWorldUnregisterPlayerPatch.OnUnregisterPlayer += OnUnregisterPlayer;
+
+            PlayerOnDeadPatch.OnDead -= OnPlayerDead;
+            PlayerOnDeadPatch.OnDead += OnPlayerDead;
         }
 
         public void OnHideInRaid(MapView map)
         {
+            GameWorldUnregisterPlayerPatch.OnUnregisterPlayer -= OnUnregisterPlayer;
+            PlayerOnDeadPatch.OnDead -= OnPlayerDead;
         }
 
         public void OnRaidEnd(MapView map)
         {
+            OnHideInRaid(map);
             TryRemoveMarkers();
         }
 
@@ -85,8 +71,7 @@ namespace NorvinskMaps.DynamicMarkers
         {
             _lastMapView = map;
 
-            var keys = _playerMarkers.Keys.ToList();
-            foreach (var key in keys)
+            foreach (var key in _playerMarkers.Keys.ToList())
             {
                 var entry = _playerMarkers[key];
                 TryRemoveMarker(key);
@@ -96,55 +81,50 @@ namespace NorvinskMaps.DynamicMarkers
 
         public void OnDisable(MapView map)
         {
+            OnHideInRaid(map);
             TryRemoveMarkers();
+        }
+
+        private void OnUnregisterPlayer(IPlayer player)
+        {
+            if (player is not Player p) return;
+            var id = p.Profile?.Id;
+            if (!string.IsNullOrEmpty(id)) TryRemoveMarker(id);
+        }
+
+        private void OnPlayerDead(Player player)
+        {
+            if (player == null) return;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var id = player.Profile?.Id;
+            if (!string.IsNullOrEmpty(id)) TryRemoveMarker(id);
+            sw.Stop();
+            if (sw.ElapsedMilliseconds >= 1)
+                NorvinskMapsPlugin.Log.LogWarning($"[DIAG] OtherPlayers.OnPlayerDead: {sw.ElapsedMilliseconds} ms");
         }
 
         private void TryRemoveMarkers()
         {
             foreach (var key in _playerMarkers.Keys.ToList())
-            {
                 TryRemoveMarker(key);
-            }
-
             _playerMarkers.Clear();
         }
 
         private void TryAddMarkers()
         {
-            if (!GameUtils.IsInRaid())
-            {
-                return;
-            }
+            if (!GameUtils.IsInRaid()) return;
 
             var gameWorld = Singleton<GameWorld>.Instance;
             if (gameWorld == null) return;
 
             foreach (var player in gameWorld.AllAlivePlayersList)
             {
-                if (player == null || player.IsYourPlayer)
-                {
-                    continue;
-                }
+                if (player == null || player.IsYourPlayer) continue;
 
                 var playerId = player.Profile?.Id;
-                if (string.IsNullOrEmpty(playerId) || _playerMarkers.ContainsKey(playerId))
-                {
-                    continue;
-                }
+                if (string.IsNullOrEmpty(playerId) || _playerMarkers.ContainsKey(playerId)) continue;
 
                 TryAddMarker(player);
-            }
-        }
-
-        private void OnUnregisterPlayer(IPlayer iPlayer)
-        {
-            var player = iPlayer as Player;
-            if (player is null) return;
-
-            var playerId = player.Profile?.Id;
-            if (!string.IsNullOrEmpty(playerId))
-            {
-                TryRemoveMarker(playerId);
             }
         }
 
@@ -152,37 +132,22 @@ namespace NorvinskMaps.DynamicMarkers
         {
             foreach (var kvp in _playerMarkers.ToList())
             {
-                var playerId = kvp.Key;
                 var player = kvp.Value.player;
-
                 bool shouldRemove = false;
+
                 try
                 {
-                    if (player == null)
-                    {
-                        shouldRemove = true;
-                    }
-                    else if (player.HasCorpse())
-                    {
-                        shouldRemove = true;
-                    }
+                    if (player == null || player.HasCorpse()) shouldRemove = true;
                 }
-                catch
-                {
-                    shouldRemove = true;
-                }
+                catch { shouldRemove = true; }
 
-                if (shouldRemove)
-                {
-                    TryRemoveMarker(playerId);
-                }
+                if (shouldRemove) TryRemoveMarker(kvp.Key);
             }
         }
 
         public void RefreshMarkers()
         {
             if (!GameUtils.IsInRaid()) return;
-
             RemoveNonActivePlayers();
             TryAddMarkers();
         }
@@ -190,21 +155,13 @@ namespace NorvinskMaps.DynamicMarkers
         private void TryAddMarker(IPlayer iPlayer)
         {
             var player = iPlayer as Player;
-            if (player == null || player.IsHeadlessClient())
-            {
-                return;
-            }
+            if (player == null || player.IsHeadlessClient()) return;
 
             var playerId = player.Profile?.Id;
-            if (string.IsNullOrEmpty(playerId))
-            {
-                return;
-            }
+            if (string.IsNullOrEmpty(playerId)) return;
 
             if (_lastMapView is null || player.IsBTRShooter() || _playerMarkers.ContainsKey(playerId))
-            {
                 return;
-            }
 
             var category = string.Empty;
             var imagePath = string.Empty;
@@ -214,47 +171,37 @@ namespace NorvinskMaps.DynamicMarkers
             var infoSide = profile?.Info?.Side ?? EPlayerSide.Savage;
             var role = profile?.Info?.Settings?.Role ?? WildSpawnType.assault;
 
-            var isPmc = infoSide == EPlayerSide.Bear
-                     || infoSide == EPlayerSide.Usec
-                     || role == WildSpawnType.pmcBEAR
-                     || role == WildSpawnType.pmcUSEC;
-
+            var isPmc = infoSide == EPlayerSide.Bear || infoSide == EPlayerSide.Usec
+                     || role == WildSpawnType.pmcBEAR || role == WildSpawnType.pmcUSEC;
             var isTrackedBoss = player.IsTrackedBoss();
 
             if (player.IsGroupedWithMainPlayer() && Settings.ShowFriendlyIntelLevel.Value <= intelLevel)
             {
                 category = _friendlyPlayerCategory;
-                imagePath = _friendlyPlayerImagePath;
+                imagePath = _arrowImagePath;
                 color = _friendlyPlayerColor;
             }
             else if (isTrackedBoss && Settings.ShowBossIntelLevel.Value <= intelLevel)
             {
                 category = _bossCategory;
-                imagePath = _bossImagePath;
+                imagePath = _starImagePath;
                 color = Settings.BossColor.Value;
             }
             else if (isPmc && Settings.ShowPmcIntelLevel.Value <= intelLevel)
             {
-                var isBear = role == WildSpawnType.pmcBEAR
-                        || infoSide == EPlayerSide.Bear;
-
+                var isBear = role == WildSpawnType.pmcBEAR || infoSide == EPlayerSide.Bear;
                 category = _enemyPlayerCategory;
                 imagePath = isBear ? _pmcBearImagePath : _pmcUsecImagePath;
-                color = isBear
-                    ? Settings.PmcBearColor.Value
-                    : Settings.PmcUsecColor.Value;
+                color = isBear ? Settings.PmcBearColor.Value : Settings.PmcUsecColor.Value;
             }
             else if (!isPmc && !isTrackedBoss && Settings.ShowScavIntelLevel.Value <= intelLevel)
             {
                 category = _scavCategory;
-                imagePath = _scavImagePath;
+                imagePath = _arrowImagePath;
                 color = Settings.ScavColor.Value;
             }
 
-            if (!ShouldShowCategory(category))
-            {
-                return;
-            }
+            if (!ShouldShowCategory(category)) return;
 
             try
             {
@@ -272,36 +219,22 @@ namespace NorvinskMaps.DynamicMarkers
             foreach (var key in _playerMarkers.Keys.ToList())
             {
                 var marker = _playerMarkers[key].marker;
-                if (!ShouldShowCategory(marker.Category))
-                {
-                    TryRemoveMarker(key);
-                }
+                if (!ShouldShowCategory(marker.Category)) TryRemoveMarker(key);
             }
         }
 
         private void TryRemoveMarker(string playerId)
         {
-            if (!_playerMarkers.ContainsKey(playerId))
-            {
-                return;
-            }
+            if (!_playerMarkers.ContainsKey(playerId)) return;
 
             try
             {
                 var entry = _playerMarkers[playerId];
                 if (entry.marker != null && entry.marker.ContainingMapView != null)
-                {
                     entry.marker.ContainingMapView.RemoveMapMarker(entry.marker);
-                }
             }
-            catch (Exception e)
-            {
-                NorvinskMapsPlugin.Log.LogWarning($"[TryRemoveMarker] Ошибка при удалении маркера: {e.Message}");
-            }
-            finally
-            {
-                _playerMarkers.Remove(playerId);
-            }
+            catch (Exception e) { NorvinskMapsPlugin.Log.LogWarning($"[TryRemoveMarker] {e.Message}"); }
+            finally { _playerMarkers.Remove(playerId); }
         }
 
         private bool ShouldShowCategory(string category)
@@ -319,25 +252,12 @@ namespace NorvinskMaps.DynamicMarkers
         private void HandleSetBoolOption(ref bool boolOption, bool value)
         {
             if (value == boolOption) return;
-
             boolOption = value;
-
-            if (boolOption)
-            {
-                TryAddMarkers();
-            }
-            else
-            {
-                RemoveDisabledMarkers();
-            }
+            if (boolOption) TryAddMarkers();
+            else RemoveDisabledMarkers();
         }
 
-        public void OnShowOutOfRaid(MapView map)
-        {
-        }
-
-        public void OnHideOutOfRaid(MapView map)
-        {
-        }
+        public void OnShowOutOfRaid(MapView map) { }
+        public void OnHideOutOfRaid(MapView map) { }
     }
 }

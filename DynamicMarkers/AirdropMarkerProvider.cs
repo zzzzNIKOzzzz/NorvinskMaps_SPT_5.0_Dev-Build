@@ -15,7 +15,6 @@ namespace NorvinskMaps.DynamicMarkers
         private MapView _lastMapView;
         private Dictionary<AirdropSynchronizableObject, MapMarker> _airdropMarkers = [];
 
-        // TODO: move to config
         private static string _airdropName => Localization.T("Airdrop");
         private const string _airdropCategory = "Airdrop";
         private const string _airdropImagePath = "Markers/airdrop.png";
@@ -26,19 +25,16 @@ namespace NorvinskMaps.DynamicMarkers
         {
             _lastMapView = map;
             
-            // add all existing airdrops
             foreach (var airdrop in AirdropBoxOnBoxLandPatch.Airdrops)
             {
                 TryAddMarker(airdrop);
             }
 
-            // subscribe to new airdrops while map is open
             AirdropBoxOnBoxLandPatch.OnAirdropLanded += TryAddMarker;
         }
 
         public void OnHideInRaid(MapView map)
         {
-            // unsubscribe to new airdrops, since we're hiding
             AirdropBoxOnBoxLandPatch.OnAirdropLanded -= TryAddMarker;
         }
 
@@ -50,8 +46,6 @@ namespace NorvinskMaps.DynamicMarkers
         public void OnMapChanged(MapView map, MapDef mapDef)
         {
             _lastMapView = map;
-
-            // transition markers from last map to this one
             foreach (var airdrop in _airdropMarkers.Keys.ToList())
             {
                 TryRemoveMarker(airdrop);

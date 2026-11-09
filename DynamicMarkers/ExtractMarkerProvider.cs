@@ -58,12 +58,7 @@ namespace NorvinskMaps.DynamicMarkers
 
         public void OnHideInRaid(MapView map)
         {
-            // unsubscribe from updates while map is hidden
-            // IL2CPP: no -= for Action fields
-            // foreach (var extract in _extractMarkers.Keys)
-            // {
-            //     extract.OnStatusChanged = extract.OnStatusChanged - UpdateExtractStatus;
-            // }
+            //ничего
         }
 
         public void OnRaidEnd(MapView map)
@@ -171,10 +166,6 @@ namespace NorvinskMaps.DynamicMarkers
             {
                 return;
             }
-
-            // IL2CPP: no -= for Action fields
-            // extract.OnStatusChanged = extract.OnStatusChanged - UpdateExtractStatus;
-
             _extractMarkers[extract].ContainingMapView.RemoveMapMarker(_extractMarkers[extract]);
             _extractMarkers.Remove(extract);
         }

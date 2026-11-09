@@ -1,4 +1,7 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
+using Il2CppInterop.Runtime.Attributes;
 using NorvinskMaps.Data;
 using NorvinskMaps.DynamicMarkers;
 using NorvinskMaps.UI.Components;
@@ -8,32 +11,32 @@ namespace NorvinskMaps
 {
     public class QuestMarkerProvider : IDynamicMarkerProvider
     {
-        private List<MapMarker> _questMarkers = [];
+        private Dictionary<string, (MapMarkerDef def, MapMarker marker)> _questMarkers = new();
         private MapView _lastMapView;
 
         public void OnShowInRaid(MapView map)
         {
             _lastMapView = map;
-
-            if (GameUtils.IsScavRaid())
+            if (GameUtils.IsScavRaid()) return;
+            
+            if (_questMarkers.Count == 0 || _questMarkers.Values.Any(v => v.marker == null))
             {
-                return;
+                RefreshMarkers();
             }
         }
 
         public void OnHideInRaid(MapView map)
         {
-            TryRemoveMarkers();
+            // Ничего не делаем
         }
 
         public void OnMapChanged(MapView map, MapDef mapDef)
         {
             _lastMapView = map;
+            if (!GameUtils.IsInRaid()) return;
 
-            if (!GameUtils.IsInRaid())
-            {
-                return;
-            }
+            TryRemoveMarkers();
+            RefreshMarkers();
         }
 
         public void OnRaidEnd(MapView map)
@@ -58,49 +61,82 @@ namespace NorvinskMaps
             if (player == null) return;
 
             QuestUtils.TryCaptureQuestData();
-
             var markerDefs = QuestUtils.GetMarkerDefsForPlayer(player);
-            if (markerDefs == null)
-            {
-                return;
-            }
+            if (markerDefs == null) return;
 
-            var newMarkers = new List<MapMarker>();
-            foreach (var markerDef in markerDefs)
+            var newDict = new Dictionary<string, (MapMarkerDef, MapMarker)>();
+            int created = 0, kept = 0, removed = 0;
+
+            foreach (var def in markerDefs)
             {
+                string key = MakeMarkerKey(def);
+
+                if (_questMarkers.TryGetValue(key, out var existing) && existing.marker != null)
+                {
+                    newDict[key] = existing;
+                    kept++;
+                    continue;
+                }
+
                 try
                 {
-                    var marker = _lastMapView.AddMapMarker(markerDef);
+                    var marker = _lastMapView.AddMapMarker(def);
                     if (marker != null)
-                        newMarkers.Add(marker);
+                    {
+                        newDict[key] = (def, marker);
+                        created++;
+                    }
                 }
-                catch (System.Exception e)
+                catch (Exception e)
                 {
                     NorvinskMapsPlugin.Log.LogWarning($"[QuestMarkerProvider] AddMapMarker: {e.Message}");
                 }
             }
 
-            TryRemoveMarkers();
-            _questMarkers = newMarkers;
+            foreach (var kvp in _questMarkers)
+            {
+                if (newDict.ContainsKey(kvp.Key)) continue;
+                if (kvp.Value.marker == null) continue;
+
+                try
+                {
+                    if (kvp.Value.marker.ContainingMapView != null)
+                        kvp.Value.marker.ContainingMapView.RemoveMapMarker(kvp.Value.marker);
+                    removed++;
+                }
+                catch { }
+            }
+
+            _questMarkers = newDict;
+
+            if (created > 0 || removed > 0)
+            {
+                NorvinskMapsPlugin.Log.LogDebug(
+                    $"[QuestMarkerProvider] diff: +{created} -{removed} ={kept}");
+            }
+        }
+
+        [HideFromIl2Cpp]
+        private static string MakeMarkerKey(MapMarkerDef def)
+        {
+            if (def == null) return "null";
+            string text = def.Text ?? "";
+            var p = def.Position;
+            return $"{text}|{(int)Math.Round(p.x)}|{(int)Math.Round(p.y)}|{(int)Math.Round(p.z)}";
         }
 
         private void TryRemoveMarkers()
         {
-            foreach (var marker in _questMarkers)
+            foreach (var kvp in _questMarkers)
             {
-                marker.ContainingMapView.RemoveMapMarker(marker);
+                if (kvp.Value.marker?.ContainingMapView == null) continue;
+                try { kvp.Value.marker.ContainingMapView.RemoveMapMarker(kvp.Value.marker); }
+                catch { }
             }
             _questMarkers.Clear();
         }
 
-        public void OnShowOutOfRaid(MapView map)
-        {
-            // ничего
-        }
-
-        public void OnHideOutOfRaid(MapView map)
-        {
-            // ничего
-        }
+        public void OnShowOutOfRaid(MapView map) { }
+        public void OnHideOutOfRaid(MapView map) { }
     }
 }

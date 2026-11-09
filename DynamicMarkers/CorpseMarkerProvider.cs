@@ -15,108 +15,46 @@ namespace NorvinskMaps.DynamicMarkers
     public class CorpseMarkerProvider : IDynamicMarkerProvider
     {
         private const string _skullImagePath = "Markers/skull.png";
+
         private const string _friendlyCorpseCategory = "Friendly Corpse";
-        private const string _friendlyCorpseImagePath = _skullImagePath;
         private static Color _friendlyCorpseColor = Color.Lerp(Color.blue, Color.white, 0.5f);
 
         private const string _killedCorpseCategory = "Killed Corpse";
-        private const string _killedCorpseImagePath = _skullImagePath;
-
         private const string _killedBossCorpseCategory = "Killed Boss Corpse";
-        private const string _killedBossCorpseImagePath = _skullImagePath;
-
         private const string _bossCorpseCategory = "Boss Corpse";
-        private const string _bossCorpseImagePath = _skullImagePath;
-
         private const string _friendlyKilledCorpseCategory = "Friendly Killed Corpse";
-        private const string _friendlyKilledCorpseImagePath = _skullImagePath;
-        private static Color _friendlyKilledCorpseColor = Color.Lerp(Color.Lerp(Color.blue, Color.white, 0.5f), Color.red, 0.5f);
-
         private const string _friendlyKilledBossCorpseCategory = "Friendly Killed Boss Corpse";
-        private const string _friendlyKilledBossCorpseImagePath = _skullImagePath;
-
         private const string _otherCorpseCategory = "Other Corpse";
-        private const string _otherCorpseImagePath = _skullImagePath;
+        private static Color _friendlyKilledCorpseColor = Color.Lerp(_friendlyCorpseColor, Color.red, 0.5f);
 
         private bool _showFriendlyCorpses = true;
-        public bool ShowFriendlyCorpses
-        {
-            get
-            {
-                return _showFriendlyCorpses;
-            }
-
-            set
-            {
-                HandleSetBoolOption(ref _showFriendlyCorpses, value);
-            }
-        }
+        public bool ShowFriendlyCorpses { get => _showFriendlyCorpses; set => HandleSetBoolOption(ref _showFriendlyCorpses, value); }
 
         private bool _showKilledCorpses = true;
-        public bool ShowKilledCorpses
-        {
-            get
-            {
-                return _showKilledCorpses;
-            }
-
-            set
-            {
-                HandleSetBoolOption(ref _showKilledCorpses, value);
-            }
-        }
+        public bool ShowKilledCorpses { get => _showKilledCorpses; set => HandleSetBoolOption(ref _showKilledCorpses, value); }
 
         private bool _showFriendlyKilledCorpses = true;
-        public bool ShowFriendlyKilledCorpses
-        {
-            get
-            {
-                return _showFriendlyKilledCorpses;
-            }
-
-            set
-            {
-                HandleSetBoolOption(ref _showFriendlyKilledCorpses, value);
-            }
-        }
+        public bool ShowFriendlyKilledCorpses { get => _showFriendlyKilledCorpses; set => HandleSetBoolOption(ref _showFriendlyKilledCorpses, value); }
 
         private bool _showBossCorpses = false;
-        public bool ShowBossCorpses
-        {
-            get
-            {
-                return _showBossCorpses;
-            }
-
-            set
-            {
-                HandleSetBoolOption(ref _showBossCorpses, value);
-            }
-        }
+        public bool ShowBossCorpses { get => _showBossCorpses; set => HandleSetBoolOption(ref _showBossCorpses, value); }
 
         private bool _showOtherCorpses = false;
-        public bool ShowOtherCorpses
-        {
-            get
-            {
-                return _showOtherCorpses;
-            }
-
-            set
-            {
-                HandleSetBoolOption(ref _showOtherCorpses, value);
-            }
-        }
+        public bool ShowOtherCorpses { get => _showOtherCorpses; set => HandleSetBoolOption(ref _showOtherCorpses, value); }
 
         private MapView _lastMapView;
-        private Dictionary<Player, MapMarker> _corpseMarkers = [];
+        private readonly Dictionary<Player, MapMarker> _corpseMarkers = new();
+        private readonly Queue<Player> _pendingCorpses = new();
+        private readonly HashSet<Player> _pendingCorpsesSet = new();
+        private float _processTimer;
+        private const float ProcessInterval = 0.05f;
 
         public void OnShowInRaid(MapView map)
         {
             _lastMapView = map;
+            TryAddMarkers();  // существующие трупы — по одному в TryAddMarker (быстро в первый раз)
 
-            TryAddMarkers();
-
+            GameWorldUnregisterPlayerPatch.OnUnregisterPlayer -= OnUnregisterPlayer;
             GameWorldUnregisterPlayerPatch.OnUnregisterPlayer += OnUnregisterPlayer;
         }
 
@@ -128,7 +66,9 @@ namespace NorvinskMaps.DynamicMarkers
         public void OnRaidEnd(MapView map)
         {
             GameWorldUnregisterPlayerPatch.OnUnregisterPlayer -= OnUnregisterPlayer;
-
+            _pendingCorpses.Clear();
+            _pendingCorpsesSet.Clear();
+            _processTimer = 0f;
             _lastMapView = map;
             TryRemoveMarkers();
         }
@@ -147,49 +87,53 @@ namespace NorvinskMaps.DynamicMarkers
         public void OnDisable(MapView map)
         {
             GameWorldUnregisterPlayerPatch.OnUnregisterPlayer -= OnUnregisterPlayer;
+            _pendingCorpses.Clear();
+            _pendingCorpsesSet.Clear();
+            _processTimer = 0f;
             TryRemoveMarkers();
+        }
+
+        public void ProcessQueue(float deltaTime)
+        {
+            if (_pendingCorpses.Count == 0) return;
+
+            _processTimer -= deltaTime;
+            if (_processTimer > 0f) return;
+            _processTimer = ProcessInterval;
+
+            if (!GameUtils.IsInRaid() || _lastMapView == null)
+            {
+                _pendingCorpses.Clear();
+                _pendingCorpsesSet.Clear();
+                return;
+            }
+
+            var corpse = _pendingCorpses.Dequeue();
+            _pendingCorpsesSet.Remove(corpse);
+            TryAddMarker(corpse);
         }
 
         private void OnUnregisterPlayer(IPlayer iPlayer)
         {
-            if (iPlayer is not Player)
-            {
-                return;
-            }
+            if (iPlayer is not Player player) return;
+            if (player == null || !player.HasCorpse()) return;
 
-            var player = iPlayer as Player;
-            if (player.HasCorpse())
-            {
-                TryAddMarker(player);
-            }
-        }
-
-        private void TryRemoveMarkers()
-        {
-            foreach (var corpse in _corpseMarkers.Keys.ToList())
-            {
-                TryRemoveMarker(corpse);
-            }
-
-            _corpseMarkers.Clear();
+            // Быстро: только enqueue, ~0.05 мс
+            if (!_corpseMarkers.ContainsKey(player) && _pendingCorpsesSet.Add(player))
+                _pendingCorpses.Enqueue(player);
         }
 
         private void TryAddMarkers()
         {
-            if (!GameUtils.IsInRaid())
-            {
-                return;
-            }
+            if (!GameUtils.IsInRaid()) return;
 
             var gameWorld = Singleton<GameWorld>.Instance;
-            foreach (var player in gameWorld.AllPlayersEverExisted)
-            {
-                if (!player.HasCorpse() || _corpseMarkers.ContainsKey(player))
-                {
-                    continue;
-                }
+            if (gameWorld == null) return;
 
-                TryAddMarker(player);
+            foreach (var p in gameWorld.AllPlayersEverExisted)
+            {
+                if (p != null && p.HasCorpse() && !_corpseMarkers.ContainsKey(p))
+                    TryAddMarker(p);
             }
         }
 
@@ -197,107 +141,84 @@ namespace NorvinskMaps.DynamicMarkers
         {
             if (!GameUtils.IsInRaid()) return;
 
-            var gameWorld = Singleton<GameWorld>.Instance;
-            if (gameWorld == null)
+            foreach (var marker in _corpseMarkers.ToArray())
             {
-                NorvinskMapsPlugin.Log.LogWarning("[CorpseMarkerProvider] gameWorld равно null");
-                return;
+                if (marker.Key == null || marker.Value == null)
+                    TryRemoveMarker(marker.Key);
             }
 
-            var corpses = new List<Player>();
+            TryAddMarkers();
+        }
 
-            foreach (var p in gameWorld.AllPlayersEverExisted)
-            {
-                bool hasCorpse = false;
-                try { hasCorpse = p.HasCorpse(); }
-                catch { }
-
-                if (hasCorpse && !_corpseMarkers.ContainsKey(p))
-                {
-                    corpses.Add(p);
-                }
-            }
-
-            foreach (var corpse in corpses)
-            {
-                TryAddMarker(corpse);
-            }
+        private void TryRemoveMarkers()
+        {
+            foreach (var corpse in _corpseMarkers.Keys.ToList())
+                TryRemoveMarker(corpse);
+            _corpseMarkers.Clear();
         }
 
         private void TryAddMarker(Player player)
         {
-            if (_lastMapView is null || _corpseMarkers.ContainsKey(player))
-            {
+            if (_lastMapView is null || player == null || _corpseMarkers.ContainsKey(player))
                 return;
-            }
-
-            if (player.IsYourPlayer)
-            {
-                return;
-            }
 
             var intelLevel = GameUtils.GetIntelLevel();
-
             if (Settings.ShowCorpseIntelLevel.Value > intelLevel) return;
 
-            // set category and color
             var category = _otherCorpseCategory;
-            var imagePath = _otherCorpseImagePath;
             var color = Settings.KilledOtherColor.Value;
 
             if (player.IsGroupedWithMainPlayer())
             {
                 category = _friendlyCorpseCategory;
-                imagePath = _friendlyCorpseImagePath;
                 color = _friendlyCorpseColor;
             }
             else if (player.IsTrackedBoss() && player.DidMainPlayerKill())
             {
                 category = _killedBossCorpseCategory;
-                imagePath = _killedBossCorpseImagePath;
                 color = Settings.KilledBossColor.Value;
             }
             else if (player.DidMainPlayerKill())
             {
                 category = _killedCorpseCategory;
-                imagePath = _killedCorpseImagePath;
                 color = Settings.KilledCorpseColor.Value;
             }
             else if (player.IsTrackedBoss() && player.DidTeammateKill())
             {
                 category = _friendlyKilledBossCorpseCategory;
-                imagePath = _friendlyKilledBossCorpseImagePath;
                 color = Settings.KilledBossColor.Value;
             }
             else if (player.DidTeammateKill())
             {
                 category = _friendlyKilledCorpseCategory;
-                imagePath = _friendlyKilledCorpseImagePath;
                 color = _friendlyKilledCorpseColor;
             }
             else if (player.IsTrackedBoss())
             {
                 category = _bossCorpseCategory;
-                imagePath = _bossCorpseImagePath;
                 color = Settings.KilledBossColor.Value;
             }
 
-            if (!ShouldShowCategory(category))
-            {
-                return;
-            }
+            if (!ShouldShowCategory(category)) return;
 
             var markerDef = new MapMarkerDef
             {
                 Category = category,
-                ImagePath = imagePath,
-                Text = string.Empty,
+                ImagePath = _skullImagePath,
+                Text = player.Profile.GetCorrectedNickname(),
                 Color = color,
                 Position = MathUtils.ConvertToMapPosition(((IPlayer)player).Position)
             };
 
-            var marker = _lastMapView.AddMapMarker(markerDef);
-            _corpseMarkers[player] = marker;
+            try
+            {
+                var marker = _lastMapView.AddMapMarker(markerDef);
+                _corpseMarkers[player] = marker;
+            }
+            catch (Exception e)
+            {
+                NorvinskMapsPlugin.Log.LogWarning($"[CorpseMarkerProvider] Error adding marker: {e.Message}");
+            }
         }
 
         private void RemoveDisabledMarkers()
@@ -306,20 +227,16 @@ namespace NorvinskMaps.DynamicMarkers
             {
                 var marker = _corpseMarkers[corpse];
                 if (!ShouldShowCategory(marker.Category))
-                {
                     TryRemoveMarker(corpse);
-                }
             }
         }
 
         private void TryRemoveMarker(Player player)
         {
-            if (!_corpseMarkers.ContainsKey(player))
-            {
-                return;
-            }
+            if (player == null || !_corpseMarkers.ContainsKey(player)) return;
 
-            _corpseMarkers[player].ContainingMapView.RemoveMapMarker(_corpseMarkers[player]);
+            if (_corpseMarkers[player] != null && _corpseMarkers[player].ContainingMapView != null)
+                _corpseMarkers[player].ContainingMapView.RemoveMapMarker(_corpseMarkers[player]);
             _corpseMarkers.Remove(player);
         }
 
@@ -327,50 +244,26 @@ namespace NorvinskMaps.DynamicMarkers
         {
             switch (category)
             {
-                case _friendlyCorpseCategory:
-                    return _showFriendlyCorpses;
+                case _friendlyCorpseCategory: return _showFriendlyCorpses;
                 case _killedCorpseCategory:
-                case _killedBossCorpseCategory:
-                    return _showKilledCorpses;
+                case _killedBossCorpseCategory: return _showKilledCorpses;
                 case _friendlyKilledCorpseCategory:
-                case _friendlyKilledBossCorpseCategory:
-                    return _showFriendlyKilledCorpses;
-                case _bossCorpseCategory:
-                    return _showBossCorpses;
-                case _otherCorpseCategory:
-                    return _showOtherCorpses;
-                default:
-                    return false;
+                case _friendlyKilledBossCorpseCategory: return _showFriendlyKilledCorpses;
+                case _bossCorpseCategory: return _showBossCorpses;
+                case _otherCorpseCategory: return _showOtherCorpses;
+                default: return false;
             }
         }
 
         private void HandleSetBoolOption(ref bool boolOption, bool value)
         {
-            if (value == boolOption)
-            {
-                return;
-            }
-
+            if (value == boolOption) return;
             boolOption = value;
-
-            if (boolOption)
-            {
-                TryAddMarkers();
-            }
-            else
-            {
-                RemoveDisabledMarkers();
-            }
+            if (boolOption) TryAddMarkers();
+            else RemoveDisabledMarkers();
         }
 
-        public void OnShowOutOfRaid(MapView map)
-        {
-            // ничего
-        }
-
-        public void OnHideOutOfRaid(MapView map)
-        {
-            // ничего
-        }
+        public void OnShowOutOfRaid(MapView map) { }
+        public void OnHideOutOfRaid(MapView map) { }
     }
 }

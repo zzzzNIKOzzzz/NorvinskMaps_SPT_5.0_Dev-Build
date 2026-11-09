@@ -64,6 +64,8 @@ namespace NorvinskMaps.UI.Components
         private List<MapLabel> _labels = new List<MapLabel>();
         private readonly List<PlayerMapMarker> _playerMarkers = new List<PlayerMapMarker>();
         private readonly List<TransformMapMarker> _transformMarkers = new List<TransformMapMarker>();
+        private readonly Dictionary<string, Stack<MapMarker>> _markerPool = new();
+        private const int MaxMarkerPoolSize = 128;
 
         [HideFromIl2Cpp]
         public static MapView Create(GameObject parent, string name)
@@ -197,9 +199,34 @@ namespace NorvinskMaps.UI.Components
         [HideFromIl2Cpp]
         public MapMarker AddMapMarker(MapMarkerDef markerDef)
         {
-            var marker = MapMarker.Create(MapMarkerContainer, markerDef, _markerSize, -CoordinateRotation, 1f / ZoomCurrent);
-            AddMapMarker(marker);
-            return marker;
+            if (markerDef == null) return null;
+            var poolKey = !string.IsNullOrEmpty(markerDef.ImagePath)
+                ? markerDef.ImagePath
+                : (markerDef.Category ?? "None");
+
+            if (_markerPool.TryGetValue(poolKey, out var stack) && stack.Count > 0)
+            {
+                MapMarker pooled = null;
+                while (stack.Count > 0)
+                {
+                    var candidate = stack.Pop();
+                    if (candidate == null || candidate.gameObject == null) continue;
+                    pooled = candidate;
+                    break;
+                }
+
+                if (pooled != null)
+                {
+                    pooled.ResetFromDef(markerDef, -CoordinateRotation, 1f / ZoomCurrent);
+                    pooled.gameObject.SetActive(true);
+                    AddMapMarker(pooled);
+                    return pooled;
+                }
+            }
+
+            var newMarker = MapMarker.Create(MapMarkerContainer, markerDef, _markerSize, -CoordinateRotation, 1f / ZoomCurrent);
+            AddMapMarker(newMarker);
+            return newMarker;
         }
 
         [HideFromIl2Cpp]
@@ -230,12 +257,63 @@ namespace NorvinskMaps.UI.Components
         }
 
         [HideFromIl2Cpp]
-        public void RemoveMapMarker(TransformMapMarker marker)
+        public void RemoveMapMarker(MapMarker marker)
         {
             if (marker == null) return;
-            _transformMarkers.Remove(marker);
-            if (marker.Inner != null)
-                RemoveMapMarker(marker.Inner);
+            if (!_markers.Contains(marker)) return;
+
+            _markers.Remove(marker);
+            marker.OnPositionChanged -= UpdateLayerBound;
+            DOTween.Kill(marker.transform);
+
+            for (int i = _playerMarkers.Count - 1; i >= 0; i--)
+            {
+                if (_playerMarkers[i] == null || _playerMarkers[i].Inner == marker)
+                    _playerMarkers.RemoveAt(i);
+            }
+
+            for (int i = _transformMarkers.Count - 1; i >= 0; i--)
+            {
+                if (_transformMarkers[i] == null || _transformMarkers[i].Inner == marker)
+                    _transformMarkers.RemoveAt(i);
+            }
+
+            var poolKey = marker.Image?.sprite != null
+                ? (marker.Image.sprite.name ?? marker.Category ?? "None")
+                : (marker.Category ?? "None");
+
+            if (!_markerPool.TryGetValue(poolKey, out var stack))
+            {
+                stack = new Stack<MapMarker>();
+                _markerPool[poolKey] = stack;
+            }
+
+            marker.ContainingMapView = null;
+            marker.gameObject.SetActive(false);
+
+            if (stack.Count < MaxMarkerPoolSize)
+            {
+                stack.Push(marker);
+            }
+            else
+            {
+                GameObject.Destroy(marker.gameObject);
+            }
+        }
+
+        [HideFromIl2Cpp]
+        public void ClearMarkerPool()
+        {
+            foreach (var stack in _markerPool.Values)
+            {
+                while (stack.Count > 0)
+                {
+                    var m = stack.Pop();
+                    if (m != null && m.gameObject != null)
+                        GameObject.Destroy(m.gameObject);
+                }
+            }
+            _markerPool.Clear();
         }
 
         [HideFromIl2Cpp]
@@ -287,22 +365,6 @@ namespace NorvinskMaps.UI.Components
                 if (!marker.Category.Contains(partial)) continue;
                 marker.gameObject.SetActive(status);
             }
-        }
-
-        [HideFromIl2Cpp]
-        public void RemoveMapMarker(MapMarker marker)
-        {
-            if (marker == null) return;
-            if (!_markers.Contains(marker)) return;
-
-            _markers.Remove(marker);
-            marker.OnPositionChanged -= UpdateLayerBound;
-            DOTween.Kill(marker.transform);
-            marker.gameObject.SetActive(false);
-            GameObject.Destroy(marker.gameObject);
-
-            _playerMarkers.RemoveAll(pm => pm == null || pm.Inner == marker);
-            _transformMarkers.RemoveAll(tm => tm == null || tm.Inner == marker);
         }
 
         [HideFromIl2Cpp]
@@ -430,7 +492,6 @@ namespace NorvinskMaps.UI.Components
 
             _immediateMapAnchor = Vector2.zero;
             CurrentMapDef = null;
-            TextureUtils.ClearCache();
         }
 
         public void SelectTopLevel(int level)
@@ -505,10 +566,11 @@ namespace NorvinskMaps.UI.Components
                 return;
             }
 
-            const float RefWidth = 1920f;
-            const float RefHeight = 1080f;
+            var maskSize = parentTransform.rect.size;
+            if (maskSize.x <= 0f || maskSize.y <= 0f)
+                maskSize = new Vector2(1920f, 1080f);
 
-            ZoomMin = Mathf.Min(RefWidth / mapSize.x, RefHeight / mapSize.y) / _zoomMinScaler;
+            ZoomMin = Mathf.Min(maskSize.x / mapSize.x, maskSize.y / mapSize.y) / _zoomMinScaler;
             ZoomMax = _zoomMaxScaler * ZoomMin;
 
             ZoomMain = ZoomMin;
@@ -519,7 +581,6 @@ namespace NorvinskMaps.UI.Components
             if (centerOnMap)
             {
                 RectTransform.anchoredPosition = Vector2.zero;
-
                 var midpoint = MathUtils.GetMidpoint(CurrentMapDef.Bounds.Min, CurrentMapDef.Bounds.Max);
                 ShiftMapToCoordinate(midpoint, 0, false);
             }
@@ -533,22 +594,29 @@ namespace NorvinskMaps.UI.Components
         public void SetMapZoom(float zoomNew, float tweenTime, bool updateMainZoom = true, bool updateMiniZoom = false)
         {
             zoomNew = Mathf.Clamp(zoomNew, ZoomMin, ZoomMax);
+            bool changed = false;
 
-            if (updateMainZoom)
+            if (updateMainZoom && !Mathf.Approximately(zoomNew, ZoomMain))
             {
-                if (Mathf.Approximately(zoomNew, ZoomMain)) return;
                 ZoomMain = zoomNew;
                 Settings.ZoomMainMap.Value = ActualToNormalized(zoomNew);
+                changed = true;
             }
 
-            if (updateMiniZoom)
+            if (updateMiniZoom && !Mathf.Approximately(zoomNew, ZoomMini))
             {
-                if (Mathf.Approximately(zoomNew, ZoomMini)) return;
                 ZoomMini = zoomNew;
                 Settings.ZoomMiniMap.Value = ActualToNormalized(zoomNew);
+                changed = true;
             }
 
-            ApplyZoom(ZoomCurrent, tweenTime);
+            var multiplier = IsMiniMapActive ? Settings.MiniMapScaleMultiplier.Value : 1f;
+            var expectedScale = ZoomCurrent * multiplier;
+
+            if (changed || !Mathf.Approximately(RectTransform.localScale.x, expectedScale))
+            {
+                ApplyZoom(ZoomCurrent, tweenTime);
+            }
         }
 
         public void ApplyMainMapZoom() => ApplyZoom(ZoomMain, 0f);
@@ -598,24 +666,44 @@ namespace NorvinskMaps.UI.Components
             if (RectTransform == null) return;
 
             zoom = Mathf.Clamp(zoom, ZoomMin, ZoomMax);
-
             var multiplier = IsMiniMapActive ? Settings.MiniMapScaleMultiplier.Value : 1f;
             var effectiveScale = zoom * multiplier;
 
-            RectTransform.DOScale(effectiveScale * Vector3.one, tweenTime);
-
-            foreach (var marker in _markers)
+            if (tweenTime <= 0f)
             {
-                var markerRt = marker.GetRectTransform();
-                if (markerRt != null)
-                    markerRt.DOScale(1 / effectiveScale * Vector3.one, tweenTime);
+                RectTransform.localScale = effectiveScale * Vector3.one;
+
+                foreach (var marker in _markers)
+                {
+                    var markerRt = marker.GetRectTransform();
+                    if (markerRt != null)
+                        markerRt.localScale = 1 / effectiveScale * Vector3.one;
+                }
+
+                foreach (var label in _labels)
+                {
+                    var labelRt = label.GetRectTransform();
+                    if (labelRt != null)
+                        labelRt.localScale = 1 / effectiveScale * Vector3.one;
+                }
             }
-
-            foreach (var label in _labels)
+            else
             {
-                var labelRt = label.GetRectTransform();
-                if (labelRt != null)
-                    labelRt.DOScale(1 / effectiveScale * Vector3.one, tweenTime);
+                RectTransform.DOScale(effectiveScale * Vector3.one, tweenTime);
+
+                foreach (var marker in _markers)
+                {
+                    var markerRt = marker.GetRectTransform();
+                    if (markerRt != null)
+                        markerRt.DOScale(1 / effectiveScale * Vector3.one, tweenTime);
+                }
+
+                foreach (var label in _labels)
+                {
+                    var labelRt = label.GetRectTransform();
+                    if (labelRt != null)
+                        labelRt.DOScale(1 / effectiveScale * Vector3.one, tweenTime);
+                }
             }
         }
 
@@ -729,9 +817,24 @@ namespace NorvinskMaps.UI.Components
 
         private MapLayer FindMatchingLayerByCoordinate(Vector3 coordinate)
         {
-            return _layers.Where(l => l.IsCoordinateInLayer(coordinate))
-                          .OrderBy(l => l.GetMatchingBoundVolume(coordinate))
-                          .FirstOrDefault();
+            MapLayer best = null;
+            float bestVolume = float.MaxValue;
+
+            for (int i = 0; i < _layers.Count; i++)
+            {
+                var layer = _layers[i];
+                if (layer == null) continue;
+                if (!layer.IsCoordinateInLayer(coordinate)) continue;
+
+                var vol = layer.GetMatchingBoundVolume(coordinate);
+                if (vol < bestVolume)
+                {
+                    bestVolume = vol;
+                    best = layer;
+                }
+            }
+
+            return best;
         }
 
         [HideFromIl2Cpp]

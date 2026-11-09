@@ -28,7 +28,8 @@ namespace NorvinskMaps.UI
         #region Variables and Declarations
         private EventHandler _adjustMiniMapHandler;
         private EventHandler _markerSettingsHandler;
-
+        private readonly Queue<MapLayerDef> _precacheQueue = new();
+        private float _precacheTimer;
         private const string MapRelPath = "Maps";
 
         private static readonly float PositionTweenTime = 0.25f;
@@ -59,6 +60,8 @@ namespace NorvinskMaps.UI
         private Mask _scrollMask;
         internal MapView MapView => _mapView;
         private MapView _mapView;
+        private bool _warmupDone = false;
+        private bool _warmupExecuted = false;
 
         private LevelSelectSlider _levelSelectSlider;
         private MapSelectDropdown _mapSelectDropdown;
@@ -91,8 +94,6 @@ namespace NorvinskMaps.UI
         private float _miniMapUpdateTimer = 0f;
         private float _levelUpdateTimer = 0f;
         private const float LevelUpdateInterval = 0.3f;
-        private int _lastAutoSelectedLevel = int.MinValue;
-
         private bool _autoCenterOnPlayerMarker = true;
         private bool _autoSelectLevel = true;
         private bool _resetZoomOnCenter = false;
@@ -100,9 +101,7 @@ namespace NorvinskMaps.UI
         private bool _transitionAnimations = true;
         private bool _firstFullscreenShown = false;
         private bool _pendingFullscreenRecalc = false;
-        private float _updateLogTimer = 1f;
-        private float _otherPlayersRefreshTimer = 1f;
-        private float _corpseRefreshTimer = 5f;
+        private float _otherPlayersRefreshTimer = 5f;
         private bool _questMarkersDirty = false;
         private float _questMarkersDirtyCooldown = 0f;
         private const float QuestMarkersMinInterval = 2f;
@@ -154,7 +153,7 @@ namespace NorvinskMaps.UI
         private void Awake()
         {
             try { DG.Tweening.DOTween.SetTweensCapacity(2000, 200); }
-            catch (Exception e) { NorvinskMapsPlugin.Log.LogDebug($"[Awake] DOTween capacity: {e.Message}"); }
+            catch (Exception e) { NorvinskMapsPlugin.Log.LogInfo($"[Awake] DOTween capacity: {e.Message}"); }
 
             var scrollRectGo = UIUtils.CreateUIGameObject(gameObject, "Scroll");
             var scrollMaskGo = UIUtils.CreateUIGameObject(scrollRectGo, "ScrollMask");
@@ -241,6 +240,7 @@ namespace NorvinskMaps.UI
             ReadConfig();
 
             _mapSelectDropdown.LoadMapDefsFromPath(MapRelPath);
+            StartPrecache();
 
             if (_mapSelectDropdown != null)
             {
@@ -339,8 +339,6 @@ namespace NorvinskMaps.UI
 
             var mapPosition = MathUtils.ConvertToMapPosition(((IPlayer)player).Position);
             _mapView.SelectLevelByCoords(mapPosition);
-
-            _lastAutoSelectedLevel = _mapView.SelectedLevel;
         }
 
         private void Update()
@@ -402,7 +400,6 @@ namespace NorvinskMaps.UI
                     {
                         var mapPosition = MathUtils.ConvertToMapPosition(((IPlayer)player).Position);
                         _mapView.SelectLevelByCoords(mapPosition);
-                        _lastAutoSelectedLevel = _mapView.SelectedLevel;
                     }
                 }
             }
@@ -415,6 +412,62 @@ namespace NorvinskMaps.UI
             }
 
             TryRecalcAfterParentActivates();
+            ProcessPrecacheQueue();
+
+            if (_peekComponent == null && GameUtils.IsInRaid())
+            {
+                var battleUI = BattleUIScreenShowPatch.LastBattleUI;
+
+                if (battleUI == null)
+                {
+                    try
+                    {
+                        battleUI = UnityEngine.Object.FindObjectOfType<EftBattleUIScreen>();
+                        if (battleUI != null)
+                            BattleUIScreenShowPatch.TrySetLastBattleUI(battleUI);
+                    }
+                    catch {}
+                }
+
+                if (battleUI != null
+                    && battleUI.gameObject != null
+                    && battleUI.gameObject.activeInHierarchy)
+                {
+                    try
+                    {
+                        TryAddPeekComponent(battleUI);
+                    }
+                    catch (Exception e)
+                    {
+                        NorvinskMapsPlugin.Log.LogWarning($"[Update] Fallback peek: {e.Message}");
+                    }
+                }
+            }
+
+            if (GameUtils.IsInRaid() && _peekComponent == null && BattleUIScreenShowPatch.LastBattleUI != null)
+            {
+                var battleUI = BattleUIScreenShowPatch.LastBattleUI;
+                if (battleUI.gameObject != null && battleUI.gameObject.activeInHierarchy)
+                {
+                    try
+                    {
+                        NorvinskMapsPlugin.Log.LogInfo("[DIAG] Update: forcing TryAddPeekComponent");
+                        TryAddPeekComponent(battleUI);
+                    }
+                    catch (Exception e)
+                    {
+                        NorvinskMapsPlugin.Log.LogWarning($"[Update] Force peek: {e.Message}");
+                    }
+                }
+            }
+
+            _otherPlayersRefreshTimer -= Time.deltaTime;
+
+            if (_isShown && GameUtils.IsInRaid())
+            {
+                var corpseProvider = GetMarkerProvider<CorpseMarkerProvider>();
+                corpseProvider?.ProcessQueue(Time.deltaTime);
+            }
 
             _otherPlayersRefreshTimer -= Time.deltaTime;
             if (_otherPlayersRefreshTimer <= 0f)
@@ -423,14 +476,42 @@ namespace NorvinskMaps.UI
                 TryRefreshOtherPlayers();
             }
 
-            _corpseRefreshTimer -= Time.deltaTime;
-            if (_corpseRefreshTimer <= 0f)
+            if (_questMarkersDirtyCooldown > 0f)
             {
-                _corpseRefreshTimer = 5f;
-                TryRefreshCorpseMarkers();
+                _questMarkersDirtyCooldown -= Time.deltaTime;
+                if (_questMarkersDirtyCooldown < 0f)
+                    _questMarkersDirtyCooldown = 0f;
             }
 
-            _updateLogTimer -= Time.deltaTime;
+            if (_questMarkersDirty && _questMarkersDirtyCooldown <= 0f)
+            {
+                _questMarkersDirty = false;
+                _questMarkersDirtyCooldown = QuestMarkersMinInterval;
+                TryRefreshQuestMarkers();
+            }
+        }
+
+        private void LateUpdate()
+        {
+            PinTextToTopLeft(_cursorPositionText?.RectTransform, CursorPositionTextOffset);
+            PinTextToTopLeft(_playerPositionText?.RectTransform, PlayerPositionTextOffset);
+        }
+
+        [HideFromIl2Cpp]
+        private void PinTextToTopLeft(RectTransform rt, Vector2 offset)
+        {
+            if (rt == null) return;
+            if (rt.parent != transform)
+            {
+                rt.SetParent(transform, false);
+            }
+
+            rt.anchorMin = new Vector2(0f, 1f);
+            rt.anchorMax = new Vector2(0f, 1f);
+            rt.pivot = new Vector2(0f, 1f);
+            rt.anchoredPosition = offset;
+            rt.localScale = Vector3.one;
+            rt.localRotation = Quaternion.identity;
         }
 
         [HideFromIl2Cpp]
@@ -589,16 +670,19 @@ namespace NorvinskMaps.UI
         [HideFromIl2Cpp]
         private void TryRefreshQuestMarkers()
         {
-            // === Событийное обновление квестов ===
-            if (_questMarkersDirty && _questMarkersDirtyCooldown <= 0f)
+            if (!IsActuallyInRaid()) return;
+            if (_mapView == null) return;
+            if (!_firstFullscreenShown && !_isShown) return;
+
+            try
             {
-                _questMarkersDirty = false;
-                _questMarkersDirtyCooldown = QuestMarkersMinInterval;
-                TryRefreshQuestMarkers();
+                var q = GetMarkerProvider<QuestMarkerProvider>();
+                if (q == null) return;
+                q.RefreshMarkers();
             }
-            else if (_questMarkersDirtyCooldown > 0f)
+            catch (Exception e)
             {
-                _questMarkersDirtyCooldown -= Time.deltaTime;
+                NorvinskMapsPlugin.Log.LogError($"[NorvinskMaps] TryRefreshQuestMarkers: {e.Message}");
             }
         }
 
@@ -687,21 +771,7 @@ namespace NorvinskMaps.UI
                 selfRt.localScale = Vector3.one;
                 selfRt.localRotation = Quaternion.identity;
 
-                RectTransform mapBlockRt = null;
-                if (transform.parent != null)
-                {
-                    for (int i = 0; i < transform.parent.childCount; i++)
-                    {
-                        var child = transform.parent.GetChild(i);
-                        if (child == null) continue;
-                        if (child.name == "MapBlock")
-                        {
-                            mapBlockRt = child as RectTransform;
-                            break;
-                        }
-                    }
-                }
-
+                RectTransform mapBlockRt = FindChildByName(transform.parent, "MapBlock");
                 if (mapBlockRt != null)
                 {
                     selfRt.anchorMin = mapBlockRt.anchorMin;
@@ -717,51 +787,50 @@ namespace NorvinskMaps.UI
                     selfRt.offsetMin = Vector2.zero;
                     selfRt.offsetMax = Vector2.zero;
                     selfRt.anchoredPosition = Vector2.zero;
-                    NorvinskMapsPlugin.Log.LogWarning(
-                        "[OnMapScreenShow] MapBlock not found — stretched to full parent");
+                    NorvinskMapsPlugin.Log.LogInfo("[OnMapScreenShow] MapBlock not found — stretched");
                 }
-            }
 
-            IsShowingMapScreen = true;
-            IsMapScreenShownFullscreen = true;
+                IsShowingMapScreen = true;
+                IsMapScreenShownFullscreen = true;
 
-            if (_mapView != null)
-            {
-                _mapView.IsMiniMapActive = false;
-            }
-
-            if (_peekComponent != null)
-            {
-                _peekComponent.IsPeeking = false;
-                _peekComponent.ForceExitMiniMap();
-            }
-
-            if (transform.parent != null && transform.parent.name == "Map Panel")
-            {
-                var parent = transform.parent;
-                for (int i = 0; i < parent.childCount; i++)
+                if (_mapView != null)
                 {
-                    var child = parent.GetChild(i);
-                    if (child == null) continue;
-                    if (child == transform) continue;
-
-                    var childName = child.name;
-                    if (childName == "ModdedMapBlock") continue;
-                    if (childName == "Pocket Map Context") continue;
-
-                    child.gameObject.SetActive(false);
+                    _mapView.IsMiniMapActive = false;
                 }
 
-                parent.gameObject.SetActive(true);
+                if (_peekComponent != null)
+                {
+                    _peekComponent.IsPeeking = false;
+                    _peekComponent.ForceExitMiniMap();
+                }
+
+                if (transform.parent != null && transform.parent.name == "Map Panel")
+                {
+                    var parent = transform.parent;
+                    for (int i = 0; i < parent.childCount; i++)
+                    {
+                        var child = parent.GetChild(i);
+                        if (child == null) continue;
+                        if (child == transform) continue;
+
+                        var childName = child.name;
+                        if (childName == "ModdedMapBlock") continue;
+                        if (childName == "Pocket Map Context") continue;
+
+                        child.gameObject.SetActive(false);
+                    }
+
+                    parent.gameObject.SetActive(true);
+                }
+
+                transform.SetAsLastSibling();
+
+                Show(false);
+
+                ForceAutoSelectLevel();
+
+                _pendingFullscreenRecalc = true;
             }
-
-            transform.SetAsLastSibling();
-
-            Show(false);
-
-            ForceAutoSelectLevel();
-
-            _pendingFullscreenRecalc = true;
         }
 
         internal void OnMapScreenClose()
@@ -775,6 +844,19 @@ namespace NorvinskMaps.UI
             IsShowingMapScreen = false;
             IsMapScreenShownFullscreen = false;
             _pendingFullscreenRecalc = false;
+        }
+
+        [HideFromIl2Cpp]
+        private static RectTransform FindChildByName(Transform parent, string name)
+        {
+            if (parent == null) return null;
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                var child = parent.GetChild(i);
+                if (child == null) continue;
+                if (child.name == name) return child as RectTransform;
+            }
+            return null;
         }
 
         [HideFromIl2Cpp]
@@ -806,17 +888,10 @@ namespace NorvinskMaps.UI
             try
             {
                 AdjustSizeAndPosition();
-
                 _isShown = true;
                 gameObject.SetActive(true);
 
-                if (_mapSelectDropdown != null)
-                {
-                    _mapSelectDropdown.LoadMapDefsFromPath(MapRelPath);
-                    _mapSelectDropdown.ClearFilter();
-                }
-
-                if (IsActuallyInRaid())
+                if (GameUtils.IsInRaid())
                 {
                     OnShowInRaid(playAnimation);
                 }
@@ -853,10 +928,12 @@ namespace NorvinskMaps.UI
             }
         }
 
-        [HideFromIl2Cpp]
         private void OnRaidEnd()
         {
             _firstFullscreenShown = false;
+            _warmupDone = false;
+            _warmupExecuted = false;
+            _warmupDone = false;
 
             if (_peekComponent != null)
             {
@@ -883,6 +960,7 @@ namespace NorvinskMaps.UI
             }
 
             _mapView.UnloadMap();
+            _mapView.ClearMarkerPool();
         }
 
         #endregion
@@ -1202,6 +1280,8 @@ namespace NorvinskMaps.UI
             selfRt.offsetMin = Vector2.zero;
             selfRt.offsetMax = Vector2.zero;
             selfRt.anchoredPosition = Vector2.zero;
+            selfRt.localScale = Vector3.one;
+            selfRt.localRotation = Quaternion.identity;
         }
 
         private Vector2 ConvertEnumToScreenPos(EMiniMapPosition pos)
@@ -1234,6 +1314,15 @@ namespace NorvinskMaps.UI
 
         private void OnShowInRaid(bool playAnimation)
         {
+            if (!GameUtils.IsInRaid()) return;
+
+            if (!_warmupDone)
+            {
+                _warmupDone = true;
+                try { WarmupForCurrentRaid(); }
+                catch (Exception e) { NorvinskMapsPlugin.Log.LogWarning($"[OnShowInRaid] Warmup: {e.Message}"); }
+            }
+
             if (ShowingMiniMap) AdjustForMiniMap(playAnimation);
             else if (IsPeeking) AdjustForPeek(playAnimation);
             else AdjustForInRaid(playAnimation);
@@ -1263,8 +1352,27 @@ namespace NorvinskMaps.UI
             var mapPosition = MathUtils.ConvertToMapPosition(((IPlayer)player).Position);
 
             if (_autoSelectLevel) _mapView.SelectLevelByCoords(mapPosition);
+            if (ShowingMiniMap)
+            {
+                _mapView.IsMiniMapActive = true;
+                _mapView.ApplyMiniMapZoom();
+                _mapView.ShiftMapToCoordinate(mapPosition, 0f, true);
+                return;
+            }
 
-            if (_rememberMapPosition && !ShowingMiniMap && _mapView.MainMapPos != Vector2.zero)
+            if (_autoCenterOnPlayerMarker)
+            {
+                _mapView.ApplyMainMapZoom();
+                if (_resetZoomOnCenter)
+                {
+                    _mapView.SetMapZoom(GetInRaidStartingZoom(), 0);
+                }
+                _mapView.ShiftMapToPlayer(mapPosition, 0, false);
+                _savedMainMapPos = _mapView.MainMapPos;
+                return;
+            }
+
+            if (_rememberMapPosition && _savedMainMapPos != Vector2.zero)
             {
                 _mapView.ApplyMainMapZoom();
                 var tweenTime = _transitionAnimations && _mapView.MainMapPos != _savedMainMapPos ? 0.35f : 0f;
@@ -1272,30 +1380,8 @@ namespace NorvinskMaps.UI
                 return;
             }
 
-            if (!_rememberMapPosition && !_autoCenterOnPlayerMarker && !ShowingMiniMap)
-            {
-                _mapView.ApplyMainMapZoom();
-                _mapView.SetMapZoom(_mapView.ZoomMin, 0f);
-                return;
-            }
-
-            if (_autoCenterOnPlayerMarker && !ShowingMiniMap && _mapView.MainMapPos == Vector2.zero)
-            {
-                _mapView.ApplyMainMapZoom();
-                if (_resetZoomOnCenter && !ShowingMiniMap)
-                {
-                    _mapView.SetMapZoom(GetInRaidStartingZoom(), 0);
-                }
-                _mapView.ShiftMapToPlayer(mapPosition, 0, false);
-            }
-            else if (!ShowingMiniMap)
-            {
-                _mapView.ApplyMainMapZoom();
-                if (_savedMainMapPos != Vector2.zero)
-                {
-                    _mapView.SetMapPos(_savedMainMapPos, 0f);
-                }
-            }
+            _mapView.ApplyMainMapZoom();
+            _mapView.SetMapZoom(_mapView.ZoomMin, 0f);
         }
 
         private void OnHideInRaid()
@@ -1487,8 +1573,77 @@ namespace NorvinskMaps.UI
         #region Config and Marker Providers
 
         [HideFromIl2Cpp]
+        public void WarmupForCurrentRaid()
+        {
+            if (_warmupExecuted) return;
+            _warmupExecuted = true;
+            _warmupDone = true;
+
+            if (!GameUtils.IsInRaid())
+            {
+                _warmupExecuted = false;
+                _warmupDone = false;
+                return;
+            }
+
+            try { QuestUtils.TryCaptureQuestData(); }
+            catch (Exception e) { NorvinskMapsPlugin.Log.LogWarning($"[Warmup] QuestData: {e.Message}"); }
+
+            try
+            {
+                var mapInternalName = GameUtils.GetCurrentMapInternalName();
+                var mapDefs = _mapSelectDropdown?.GetMapDefs();
+                if (mapDefs != null)
+                {
+                    foreach (var mapDef in mapDefs)
+                    {
+                        if (mapDef?.MapInternalNames == null) continue;
+                        if (!mapDef.MapInternalNames.Contains(mapInternalName)) continue;
+
+                        if (mapDef.Layers == null) continue;
+                        foreach (var layerDef in mapDef.Layers.Values)
+                        {
+                            if (layerDef != null)
+                                _precacheQueue.Enqueue(layerDef);
+                        }
+                        break;
+                    }
+                }
+            }
+            catch (Exception e) { NorvinskMapsPlugin.Log.LogWarning($"[Warmup] Precache: {e.Message}"); }
+
+            try
+            {
+                var warmupCategories = new[] { "Corpse", "Killed Corpse", "Boss Corpse", "Other Corpse", "Friendly Corpse" };
+                foreach (var cat in warmupCategories)
+                {
+                    var def = new MapMarkerDef
+                    {
+                        Category = cat,
+                        ImagePath = "Markers/skull.png",
+                        Text = "",
+                        Color = Color.white,
+                        Position = Vector3.zero
+                    };
+                    try
+                    {
+                        var m = _mapView.AddMapMarker(def);
+                        if (m != null) _mapView.RemoveMapMarker(m);
+                    }
+                    catch {}
+                }
+            }
+            catch (Exception e) { NorvinskMapsPlugin.Log.LogWarning($"[Warmup] Pool: {e.Message}"); }
+
+            NorvinskMapsPlugin.Log.LogInfo("[Warmup] Completed");
+        }
+
+        [HideFromIl2Cpp]
         internal void TryAddPeekComponent(EftBattleUIScreen battleUI)
         {
+            IsMapScreenShownFullscreen = false;
+            IsShowingMapScreen = false;
+
             if (_peekComponent != null)
             {
                 var peekGo = _peekComponent.gameObject;
@@ -1555,9 +1710,59 @@ namespace NorvinskMaps.UI
             return (T)_dynamicMarkerProviders[typeof(T)];
         }
 
-        #endregion
+        [HideFromIl2Cpp]
+        private void StartPrecache()
+        {
+            _precacheQueue.Clear();
+            var markerIcons = new[]
+            {
+                "Markers/skull.png",
+                "Markers/arrow.png",
+                "Markers/boss.png",
+                "Markers/pmc_bear.png",
+                "Markers/pmc_usec.png",
+                "Markers/exit.png",
+                "Markers/transit.png",
+                "Markers/airdrop.png",
+                "Markers/backpack.png",
+                "Markers/btr.png",
+                "Markers/quest.png",
+                "Markers/stash.png",
+                "Markers/door_with_lock.png",
+                "Markers/door_with_key.png",
+                "Markers/lever.png",
+            };
+            foreach (var path in markerIcons)
+            {
+                try { TextureUtils.GetOrLoadCachedSprite(path); }
+                catch {}
+            }
+            _precacheTimer = 0f;
+            NorvinskMapsPlugin.Log.LogInfo(
+                $"[Precache] Icons loaded, queued {_precacheQueue.Count} layer sprites");
+        }
 
+        private void ProcessPrecacheQueue()
+        {
+            if (_precacheQueue.Count == 0) return;
+            if (!_isShown && !ShowingMiniMap)
+                return;
+
+            _precacheTimer -= Time.deltaTime;
+            if (_precacheTimer > 0f) return;
+            _precacheTimer = 0.05f;
+
+            var def = _precacheQueue.Dequeue();
+            try { SvgUtils.GetOrLoadCachedSprite(def); }
+            catch (Exception e)
+            {
+                NorvinskMapsPlugin.Log.LogWarning($"[Precache] {def?.ImagePath}: {e.Message}");
+            }
+        }
+
+        #endregion
         #region Utils And Caching
+
 
         private float GetInRaidStartingZoom()
         {

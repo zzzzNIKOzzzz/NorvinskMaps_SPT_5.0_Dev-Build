@@ -77,7 +77,7 @@ namespace NorvinskMaps.UI.Components
 
             var name = Localization.T("UnknownPlayer");
             try { name = player.Profile?.GetCorrectedNickname() ?? Localization.T("UnknownPlayer"); }
-            catch { /* ignore */ }
+            catch { /* ничего */ }
 
             MapMarker inner;
             try

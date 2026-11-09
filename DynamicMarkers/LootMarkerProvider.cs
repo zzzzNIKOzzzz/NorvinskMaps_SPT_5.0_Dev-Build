@@ -15,21 +15,20 @@ namespace NorvinskMaps.DynamicMarkers
     {
         private MapView _lastMapView;
         private Dictionary<LootItem, MapMarker> _lootMarkers = [];
-        
+
         public void OnShowInRaid(MapView map)
         {
             _lastMapView = map;
-            
+            var wishSet = GameUtils.GetWishListSet();
+            if (wishSet.Count == 0) return;
+
             var lootList = Singleton<GameWorld>.Instance.LootList;
-            
             foreach (var item in lootList)
             {
                 if (item is not LootItem loot) continue;
-                
-                if (GameUtils.GetWishListItems().Contains(new MongoID(loot.TemplateId)))
-                {
+
+                if (wishSet.Contains(new MongoID(loot.TemplateId)))
                     TryAddMarker(loot);
-                }
             }
         }
 
@@ -69,15 +68,15 @@ namespace NorvinskMaps.DynamicMarkers
                 TryAddMarker(item);
             }
         }
-        
+
         private void TryAddMarker(LootItem item)
         {
             if (item == null || item.Item == null)
                 return;
-            
+
             if (_lootMarkers.ContainsKey(item)) return;
             if (Settings.ShowWishListItemsIntelLevel.Value > GameUtils.GetIntelLevel()) return;
-            
+
             var staticIcons = EFTHardSettings.Instance.StaticIcons;
             var itemType = ItemViewFactory.GetItemType(Il2CppSystem.Type.GetType(item.Item.GetType().FullName));
             var itemSprite = staticIcons.ItemTypeSprites.GetValueOrDefault(itemType);
@@ -85,7 +84,7 @@ namespace NorvinskMaps.DynamicMarkers
             var transform = item.transform;
             if (transform == null)
                 return;
-            
+
             var markerDef = new MapMarkerDef
             {
                 Category = "Loot",
@@ -94,7 +93,7 @@ namespace NorvinskMaps.DynamicMarkers
                 Position = MathUtils.ConvertToMapPosition(transform),
                 Text = item.Item.TemplateId.LocalizedName()
             };
-            
+
             var marker = _lastMapView.AddMapMarker(markerDef);
             _lootMarkers[item] = marker;
         }
@@ -110,11 +109,11 @@ namespace NorvinskMaps.DynamicMarkers
         private void TryRemoveMarker(LootItem item)
         {
             if (!_lootMarkers.ContainsKey(item)) return;
-            
+
             _lootMarkers[item].ContainingMapView.RemoveMapMarker(_lootMarkers[item]);
             _lootMarkers.Remove(item);
         }
-        
+
         public void OnShowOutOfRaid(MapView map)
         {
             // ничего

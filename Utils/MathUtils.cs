@@ -9,6 +9,10 @@ namespace NorvinskMaps.Utils
             X, Y, Z
         }
 
+        // 0.01m ≈ 1 см — достаточно для позиций, не отсеивает реальные движения
+        public const float DefaultPositionTolerance = 0.01f;
+        public const float DefaultRotationTolerance = 0.1f;
+
         public static Vector2 GetRotatedVector2(Vector2 vector, float degreeRotation)
         {
             var x = vector.x;
@@ -20,7 +24,7 @@ namespace NorvinskMaps.Utils
 
         public static Vector2 GetRotatedRectangle(Vector2 rectangle, float degreeRotation)
         {
-            // адаптированно DrakiaXYZ и acidphantasm из https://stackoverflow.com/questions/54072295/get-bounds-of-unrotated-rotated-rectangle
+            // адаптированно DrakiaXYZ и acidphantasm из https://stackoverflow.com/questions/54072295
             // Под CC BY-SA 4.0 Лицензией
             var AB = rectangle.x;
             var AD = rectangle.y;
@@ -55,20 +59,16 @@ namespace NorvinskMaps.Utils
         {
             switch (axis)
             {
-                case RotationAxis.X:
-                    return -transform.rotation.eulerAngles.x;
-                case RotationAxis.Y:
-                    return -transform.rotation.eulerAngles.y;
-                case RotationAxis.Z:
-                    return -transform.rotation.eulerAngles.z;
+                case RotationAxis.X: return -transform.rotation.eulerAngles.x;
+                case RotationAxis.Y: return -transform.rotation.eulerAngles.y;
+                case RotationAxis.Z: return -transform.rotation.eulerAngles.z;
             }
-
             return 0f;
         }
 
-        public static bool ApproxEquals(float first, float second)
+        public static bool ApproxEquals(float first, float second, float tolerance = DefaultPositionTolerance)
         {
-            return Mathf.Abs(first - second) < float.Epsilon;
+            return Mathf.Abs(first - second) < tolerance;
         }
     }
 }

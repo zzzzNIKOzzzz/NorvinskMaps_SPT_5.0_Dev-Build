@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
 using NorvinskMaps.Utils;
 using EFT;
@@ -30,6 +29,9 @@ namespace NorvinskMaps.Patches
                         HiddenStashes.Add(obj);
                     }
                 }
+
+                NorvinskMapsPlugin.Log.LogInfo(
+                    $"[DIAG] GameStartedPatch: stashes={HiddenStashes.Count}");
             }
             catch (Exception e)
             {

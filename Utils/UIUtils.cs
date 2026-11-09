@@ -81,13 +81,12 @@ namespace NorvinskMaps.Utils
                 text.outlineColor = new Color32(0, 0, 0, 255);
                 text.outlineWidth = 0.15f;
                 text.fontStyle = FontStyles.Bold;
-                text.ForceMeshUpdate(true, true);
+                // ВАЖНО: НЕ вызываем ForceMeshUpdate.
+                // TMP сам сделает re-mesh в конце кадра (лениво).
+                // Это экономит ~2-4 мс на каждом MapMarker.Create.
                 return true;
             }
-            catch
-            {
-                // ничего
-            }
+            catch { }
 
             return false;
         }

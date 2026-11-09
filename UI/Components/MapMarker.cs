@@ -180,6 +180,56 @@ namespace NorvinskMaps.UI.Components
             return marker;
         }
 
+        [HideFromIl2Cpp]
+        public void ResetFromDef(MapMarkerDef def, float degreesRotation, float scale)
+        {
+            Text = def.Text ?? "";
+            Category = def.Category ?? "None";
+            IsDynamic = false;
+            ShowInRaid = def.ShowInRaid;
+            AssociatedItemId = def.AssociatedItemId ?? "";
+            _initialRotation = degreesRotation;
+            _isInFullReveal = false;
+            _position = def.Position;
+            _rotation = 0f;
+
+            Sprite sprite = def.Sprite
+                ?? (!string.IsNullOrEmpty(def.ImagePath)
+                    ? TextureUtils.GetOrLoadCachedSprite(def.ImagePath)
+                    : null);
+            if (Image != null && sprite != null)
+                Image.sprite = sprite;
+
+
+            var rt = RectTransform;
+            if (rt != null)
+            {
+                rt.sizeDelta = _size;
+                rt.pivot = def.Pivot;
+                rt.localScale = scale * Vector2.one;
+                rt.localRotation = Quaternion.Euler(0, 0, degreesRotation);
+                rt.anchoredPosition = def.Position;
+            }
+
+            if (Image != null && Image.gameObject != null)
+            {
+                var irt = Image.GetRectTransform();
+                if (irt != null)
+                {
+                    irt.sizeDelta = _size;
+                    irt.localRotation = Quaternion.identity;
+                }
+            }
+
+            if (Label != null)
+            {
+                Label.text = Text;
+                Label.gameObject.SetActive(false);
+            }
+
+            Color = def.Color;
+        }
+
         protected virtual void OnEnable()
         {
             TrySetOutlineAndResize();

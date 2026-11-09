@@ -34,6 +34,18 @@ namespace NorvinskMaps.Utils
         private static FieldInfo _cachedQuestStatusField;
         private static PropertyInfo _cachedQuestStatusProp;
         private static bool _questStatusLookupTried = false;
+        private static bool IsLikelyMongoId(string s)
+        {
+            if (string.IsNullOrEmpty(s) || s.Length != 24) return false;
+            foreach (char c in s)
+            {
+                bool isHex = (c >= '0' && c <= '9')
+                          || (c >= 'a' && c <= 'f')
+                          || (c >= 'A' && c <= 'F');
+                if (!isHex) return false;
+            }
+            return true;
+        }
 
         private static bool TryGetQuestStatus(Quest quest, out EQuestStatus status)
         {
@@ -98,8 +110,11 @@ namespace NorvinskMaps.Utils
         internal static void TryCaptureQuestData()
         {
             var gameWorld = Singleton<GameWorld>.Instance;
+            if (gameWorld == null) return;
 
-            if (TriggersWithIds == null)
+            // Пересобираем триггеры, если их нет ИЛИ они пустые
+            // (бывает, что при первом вызове локация ещё не загрузилась)
+            if (TriggersWithIds == null || TriggersWithIds.Count == 0)
             {
                 TriggersWithIds = new List<TriggerWithId>();
 
@@ -140,17 +155,32 @@ namespace NorvinskMaps.Utils
 
                 _zonePositionCache = null;
                 _zonePositionCacheBuiltAt = float.NegativeInfinity;
+
+                NorvinskMapsPlugin.Log.LogDebug(
+                    $"[QuestUtils] Triggers captured: {TriggersWithIds.Count}");
             }
 
-            if (QuestItems == null)
+            if (QuestItems == null || QuestItems.Count == 0)
             {
-                var iteration = Traverse.Create(gameWorld)
-                    .Field("LootItems")
-                    .Field("_iteration")
-                    .GetValue<List<LootItem>>();
+                try
+                {
+                    var iteration = Traverse.Create(gameWorld)
+                        .Field("LootItems")
+                        .Field("_iteration")
+                        .GetValue<List<LootItem>>();
 
-                QuestItems = iteration?.Where(i => i.Item.QuestItem).ToList()
-                          ?? new List<LootItem>();
+                    QuestItems = iteration?.Where(i => i.Item.QuestItem).ToList()
+                              ?? new List<LootItem>();
+
+                    NorvinskMapsPlugin.Log.LogDebug(
+                        $"[QuestUtils] QuestItems captured: {QuestItems.Count}");
+                }
+                catch (Exception e)
+                {
+                    NorvinskMapsPlugin.Log.LogWarning(
+                        $"[QuestUtils] LootItems capture: {e.Message}");
+                    if (QuestItems == null) QuestItems = new List<LootItem>();
+                }
             }
         }
 
@@ -161,6 +191,8 @@ namespace NorvinskMaps.Utils
 
             _zonePositionCache = null;
             _zonePositionCacheBuiltAt = float.NegativeInfinity;
+            _warnedMissingZone.Clear();
+            _dumpedFieldSets.Clear();
         }
 
         private static void RebuildZonePositionCacheIfNeeded()
@@ -201,6 +233,11 @@ namespace NorvinskMaps.Utils
 
         internal static IEnumerable<MapMarkerDef> GetMarkerDefsForPlayer(Player player)
         {
+            NorvinskMapsPlugin.Log.LogDebug(
+                $"[QuestUtils] GetMarkerDefsForPlayer: " +
+                $"triggers={(TriggersWithIds?.Count ?? -1)}, " +
+                $"items={(QuestItems?.Count ?? -1)}");
+
             if (TriggersWithIds == null || QuestItems == null)
             {
                 NorvinskMapsPlugin.Log.LogWarning(
@@ -223,15 +260,63 @@ namespace NorvinskMaps.Utils
             var markers = new List<MapMarkerDef>();
             var conditions = GetIncompleteQuestConditions(player, quest);
 
+            // ==========================================
+            // 1. ПОИСК ИМЕНИ КВЕСТА
+            // ==========================================
+            string questName = null;
+            try
+            {
+                // Пробуем парсер (quests.json / ru.json / mainQuestNotes.json)
+                questName = QuestLocaleLoader.GetQuestName(quest.Id.ToString());
+
+                // Если нет — пробуем стандартную локализацию
+                if (string.IsNullOrEmpty(questName))
+                {
+                    var key = quest.Template.NameLocaleKey;
+                    if (key != null)
+                    {
+                        var bsgl = key.BSGLocalized();
+                        if (!string.IsNullOrEmpty(bsgl) && !IsLikelyMongoId(bsgl))
+                            questName = bsgl;
+                    }
+                }
+
+                // Если всё еще пусто — вытаскиваем оригинальное имя из памяти IL2CPP
+                if (string.IsNullOrEmpty(questName) || IsLikelyMongoId(questName))
+                {
+                    var nameProp = quest.Template.GetType().GetProperty("Name");
+                    if (nameProp != null)
+                    {
+                        var val = nameProp.GetValue(quest.Template)?.ToString();
+                        if (!string.IsNullOrEmpty(val) && !IsLikelyMongoId(val))
+                            questName = val;
+                    }
+                }
+            }
+            catch { }
+
+            // Если совсем ничего не нашли — пишем "Сюжетный квест"
+            if (string.IsNullOrEmpty(questName) || IsLikelyMongoId(questName))
+            {
+                questName = "Сюжетный квест";
+            }
+
+            // ==========================================
+            // 2. ПОИСК КООРДИНАТ И СОЗДАНИЕ МАРКЕРОВ
+            // ==========================================
+            // ВОТ ЭТОГО БЛОКА У ТЕБЯ НЕ ХВАТАЛО:
             foreach (var condition in conditions)
             {
-                var questName = quest.Template.NameLocaleKey.BSGLocalized();
-                var conditionDescription = condition.id.ToString();
+                var conditionDescription = condition.id.BSGLocalized();
 
+                // Получаем координаты для текущего условия (убийство, посещение зоны, предмет и т.д.)
                 var positions = GetPositionsForCondition(condition, questName, conditionDescription);
+
                 foreach (var position in positions)
                 {
                     var isDuplicate = false;
+
+                    // Проверка на дубликаты (чтобы маркеры не накладывались друг на друга)
                     foreach (var marker in markers)
                     {
                         if (MathUtils.ApproxEquals(marker.Position.x, position.x)
@@ -243,8 +328,12 @@ namespace NorvinskMaps.Utils
                         }
                     }
 
-                    if (isDuplicate) continue;
+                    if (isDuplicate)
+                    {
+                        continue;
+                    }
 
+                    // Создаем и добавляем маркер
                     markers.Add(CreateQuestMapMarkerDef(position, questName, conditionDescription));
                 }
             }
@@ -522,23 +611,23 @@ namespace NorvinskMaps.Utils
             var questController = player.QuestController;
             if (questController == null)
             {
-                NorvinskMapsPlugin.Log.LogError($"[QuestUtils] player={player.Id} QuestController is null");
+                NorvinskMapsPlugin.Log.LogWarning("[QuestUtils] QuestController null");
                 yield break;
             }
 
             var questBook = questController.Quests;
             if (questBook == null)
             {
-                NorvinskMapsPlugin.Log.LogError($"[QuestUtils] player={player.Id} Quests is null");
+                NorvinskMapsPlugin.Log.LogWarning("[QuestUtils] Quests null");
                 yield break;
             }
 
             int count = 0;
-            try { count = questBook.Count; }
-            catch (Exception e)
-            {
-                NorvinskMapsPlugin.Log.LogError($"[QuestUtils] questBook.Count threw: {e.Message}");
-            }
+            try { count = questBook.Count; } catch { }
+
+            NorvinskMapsPlugin.Log.LogDebug($"[QuestUtils] total quests: {count}");
+
+            int startedCount = 0;
 
             for (int i = 0; i < count; i++)
             {
@@ -552,11 +641,12 @@ namespace NorvinskMaps.Utils
 
                 if (quest == null) continue;
                 if (quest.Template?.Conditions == null) continue;
-
-                // Быстрая проверка статуса через кэшированный reflection
                 if (TryGetQuestStatus(quest, out var status))
                 {
-                    if (status != EQuestStatus.Started) continue;
+                    // Started и AvailableForFinish — оба должны давать маркеры.
+                    // Story quests (основная сюжетная линия) часто висят в AvailableForFinish.
+                    if (status != EQuestStatus.Started && status != EQuestStatus.AvailableForFinish)
+                        continue;
                 }
                 else
                 {
@@ -566,6 +656,7 @@ namespace NorvinskMaps.Utils
                         continue;
                 }
 
+                startedCount++;
                 yield return quest;
             }
         }

@@ -17,9 +17,7 @@ namespace NorvinskMaps.UI.Controls
 
         [HideFromIl2Cpp]
         public event Action<MapDef> OnMapSelected;
-
         public RectTransform RectTransform => gameObject.transform as RectTransform;
-
         private DropDownBox _dropdown;
         private readonly Dictionary<string, DateTime> _writeTimes = new Dictionary<string, DateTime>();
         private readonly Dictionary<string, MapDef> _mapDefs = new Dictionary<string, MapDef>();
@@ -27,6 +25,8 @@ namespace NorvinskMaps.UI.Controls
         private string _nameFilter = null;
         private int _lastSelectedValue = int.MinValue;
         private bool _trackingEnabled = false;
+        private bool _loadedOnce = false;
+        private float _pollTimer;
         private System.Reflection.PropertyInfo _valueProp = null;
         private System.Reflection.FieldInfo _valueField = null;
 
@@ -60,39 +60,24 @@ namespace NorvinskMaps.UI.Controls
         [HideFromIl2Cpp]
         private void SetupDropdownValueTracking()
         {
-            if (_dropdown == null)
-            {
-                NorvinskMapsPlugin.Log.LogError("[MapSelectDropdown.SetupDropdownValueTracking] _dropdown is null");
-                return;
-            }
+            if (_dropdown == null) return;
 
             var t = _dropdown.GetType();
-
             var flags = System.Reflection.BindingFlags.Public
                       | System.Reflection.BindingFlags.NonPublic
                       | System.Reflection.BindingFlags.Instance;
 
             string[] candidateNames = {
-            "CurrentIndex",
-            "_CurrentIndex_k__BackingField",
-            "CurrentValue",
-            "SelectedValue",
-            "Value",
-            "SelectedIndex",
-            "Index",
-            "_currentValue",
-            "_value",
-            "_selectedIndex"
+                "CurrentIndex", "_CurrentIndex_k__BackingField",
+                "CurrentValue", "SelectedValue", "Value",
+                "SelectedIndex", "Index", "_currentValue",
+                "_value", "_selectedIndex"
             };
 
             foreach (var n in candidateNames)
             {
                 var p = t.GetProperty(n, flags);
-                if (p != null && p.CanRead)
-                {
-                    _valueProp = p;
-                    break;
-                }
+                if (p != null && p.CanRead) { _valueProp = p; break; }
             }
 
             if (_valueProp == null)
@@ -100,25 +85,12 @@ namespace NorvinskMaps.UI.Controls
                 foreach (var n in candidateNames)
                 {
                     var f = t.GetField(n, flags);
-                    if (f != null)
-                    {
-                        _valueField = f;
-                        break;
-                    }
+                    if (f != null) { _valueField = f; break; }
                 }
             }
 
             _trackingEnabled = (_valueProp != null || _valueField != null);
-
-            if (_trackingEnabled)
-            {
-                _lastSelectedValue = ReadDropdownValue();
-            }
-            else
-            {
-                NorvinskMapsPlugin.Log.LogError(
-                    "[MapSelectDropdown.SetupDropdownValueTracking] no int field/property found — switching will not work");
-            }
+            if (_trackingEnabled) _lastSelectedValue = ReadDropdownValue();
         }
 
         [HideFromIl2Cpp]
@@ -133,16 +105,16 @@ namespace NorvinskMaps.UI.Controls
                 if (v == null) return _lastSelectedValue;
                 return System.Convert.ToInt32(v);
             }
-            catch (System.Exception e)
-            {
-                NorvinskMapsPlugin.Log.LogWarning($"[MapSelectDropdown.ReadDropdownValue] {e.Message}");
-                return _lastSelectedValue;
-            }
+            catch { return _lastSelectedValue; }
         }
 
         private void Update()
         {
             if (!_trackingEnabled || _dropdown == null) return;
+
+            _pollTimer -= UnityEngine.Time.deltaTime;
+            if (_pollTimer > 0f) return;
+            _pollTimer = 0.1f;
 
             int v = ReadDropdownValue();
             if (v != _lastSelectedValue)
@@ -151,41 +123,36 @@ namespace NorvinskMaps.UI.Controls
 
                 if (v >= 0 && _selectableMapDefs != null && v < _selectableMapDefs.Count)
                 {
-                    OnSelectDropdownMap(v);
+                    OnMapSelected?.Invoke(_selectableMapDefs[v]);
                 }
             }
         }
 
-        private void OnSelectDropdownMap(int index)
-        {
-            OnMapSelected?.Invoke(_selectableMapDefs[index]);
-        }
-
         [HideFromIl2Cpp]
-        public IEnumerable<MapDef> GetMapDefs()
-        {
-            return _mapDefs.Values;
-        }
+        public IEnumerable<MapDef> GetMapDefs() => _mapDefs.Values;
 
         [HideFromIl2Cpp]
         public void LoadFirstAvailableMap()
         {
-            if (_selectableMapDefs == null || _selectableMapDefs.Count == 0)
-            {
-                return;
-            }
-
-            OnSelectDropdownMap(0);
+            if (_selectableMapDefs == null || _selectableMapDefs.Count == 0) return;
+            OnMapSelected?.Invoke(_selectableMapDefs[0]);
         }
 
         [HideFromIl2Cpp]
         public void FilterByInternalMapName(string internalMapName)
         {
+            if (_nameFilter == internalMapName
+                && _selectableMapDefs != null
+                && _selectableMapDefs.Count > 0)
+            {
+                return;
+            }
+
             _nameFilter = internalMapName;
             if (FilteredMapDefs().FirstOrDefault() == null)
             {
                 _nameFilter = "";
-                NorvinskMapsPlugin.Log.LogWarning($"Cannot filter by {internalMapName}, no MapDefs match that map");
+                NorvinskMapsPlugin.Log.LogWarning($"Cannot filter by {internalMapName}");
             }
 
             ChangeAvailableMapDefs(FilteredMapDefs());
@@ -194,6 +161,13 @@ namespace NorvinskMaps.UI.Controls
         [HideFromIl2Cpp]
         public void ClearFilter()
         {
+            if (_nameFilter == null
+                && _selectableMapDefs != null
+                && _selectableMapDefs.Count > 0)
+            {
+                return;
+            }
+
             _nameFilter = null;
             ChangeAvailableMapDefs(FilteredMapDefs());
         }
@@ -201,17 +175,10 @@ namespace NorvinskMaps.UI.Controls
         [HideFromIl2Cpp]
         public void OnLoadMap(MapDef mapDef)
         {
-            if (mapDef == null) return;
-            if (_selectableMapDefs == null) return;
+            if (mapDef == null || _selectableMapDefs == null) return;
 
             var index = _selectableMapDefs.IndexOf(mapDef);
-            if (index < 0)
-            {
-                NorvinskMapsPlugin.Log.LogWarning(
-                    $"[MapSelectDropdown.OnLoadMap] mapDef '{mapDef.DisplayName}' not in selectable list — skip UpdateValue");
-                return;
-            }
-
+            if (index < 0) return;
             SetDropdownIndex(index);
         }
 
@@ -224,14 +191,12 @@ namespace NorvinskMaps.UI.Controls
             {
                 var minEmpty = new Il2CppSystem.Nullable<int>();
                 var maxEmpty = new Il2CppSystem.Nullable<int>();
-
                 _dropdown.UpdateValue(index, false, minEmpty, maxEmpty, false);
                 _lastSelectedValue = index;
             }
             catch (Exception e)
             {
-                NorvinskMapsPlugin.Log.LogWarning(
-                    $"[MapSelectDropdown.SetDropdownIndex] UpdateValue failed: {e.GetType().Name}: {e.Message}");
+                NorvinskMapsPlugin.Log.LogWarning($"[MapSelectDropdown] SetDropdownIndex: {e.Message}");
             }
         }
 
@@ -239,35 +204,23 @@ namespace NorvinskMaps.UI.Controls
         public bool IsDropdownOpen()
         {
             if (_dropdown == null) return false;
-
-            try
-            {
-                return Traverse.Create(_dropdown).Property<bool>("CurrentState").Value;
-            }
-            catch
-            {
-                return false;
-            }
+            try { return Traverse.Create(_dropdown).Property<bool>("CurrentState").Value; }
+            catch { return false; }
         }
 
         [HideFromIl2Cpp]
         public void TryCloseDropdown()
         {
             if (_dropdown == null) return;
-
-            try
-            {
-                _dropdown.Close();
-            }
-            catch (Exception e)
-            {
-                NorvinskMapsPlugin.Log.LogWarning($"[MapSelectDropdown.TryCloseDropdown] {e.Message}");
-            }
+            try { _dropdown.Close(); } catch { }
         }
 
         [HideFromIl2Cpp]
         public void LoadMapDefsFromPath(string relPath)
         {
+            if (_loadedOnce) return;
+            _loadedOnce = true;
+
             try
             {
                 var absolutePath = Path.Combine(NorvinskMapsPlugin.Path, relPath);
@@ -287,13 +240,6 @@ namespace NorvinskMaps.UI.Controls
                     string tempPath = null;
                     try
                     {
-                        var writeTime = File.GetLastWriteTimeUtc(path);
-                        if (_writeTimes.ContainsKey(path) && _writeTimes[path] == writeTime)
-                        {
-                            continue;
-                        }
-                        _writeTimes[path] = writeTime;
-
                         var raw = File.ReadAllText(path);
                         var clean = StripJsonComments(raw);
 
@@ -304,29 +250,13 @@ namespace NorvinskMaps.UI.Controls
                         File.WriteAllText(tempPath, clean, new System.Text.UTF8Encoding(false));
 
                         var mapDef = MapDef.LoadFromPath(tempPath);
-
-                        if (mapDef == null)
-                        {
-                            NorvinskMapsPlugin.Log.LogWarning($"[MapSelectDropdown] LoadFromPath returned null: {path}");
-                            continue;
-                        }
-
-                        var layerCount = mapDef.Layers?.Count ?? 0;
-
-                        if (layerCount == 0)
-                        {
-                            NorvinskMapsPlugin.Log.LogWarning(
-                                $"[MapSelectDropdown] SKIP '{mapDef.DisplayName}' — 0 layers (bad JSON schema?): {path}");
-                            continue;
-                        }
+                        if (mapDef == null || (mapDef.Layers?.Count ?? 0) == 0) continue;
 
                         _mapDefs[path] = mapDef;
                     }
                     catch (Exception e)
                     {
-                        NorvinskMapsPlugin.Log.LogError($"[MapSelectDropdown] Parse failed: {path}");
-                        NorvinskMapsPlugin.Log.LogError($"  {e.Message}");
-                        NorvinskMapsPlugin.Log.LogError($"  {e.StackTrace}");
+                        NorvinskMapsPlugin.Log.LogError($"[MapSelectDropdown] Parse failed: {path}: {e.Message}");
                     }
                     finally
                     {
@@ -342,7 +272,6 @@ namespace NorvinskMaps.UI.Controls
             catch (Exception e)
             {
                 NorvinskMapsPlugin.Log.LogError($"[MapSelectDropdown] Outer error: {e.Message}");
-                NorvinskMapsPlugin.Log.LogError(e.StackTrace);
             }
         }
 
@@ -350,20 +279,14 @@ namespace NorvinskMaps.UI.Controls
         private void ChangeAvailableMapDefs(IEnumerable<MapDef> mapDefs)
         {
             if (_selectableMapDefs != null && Enumerable.SequenceEqual(mapDefs, _selectableMapDefs))
-            {
                 return;
-            }
 
             _selectableMapDefs = mapDefs.ToList();
 
             var names = new Il2CppSystem.Collections.Generic.List<string>();
-            foreach (var def in _selectableMapDefs)
-            {
-                names.Add(def.DisplayName);
-            }
+            foreach (var def in _selectableMapDefs) names.Add(def.DisplayName);
 
             _dropdown.Show(names);
-
             gameObject.SetActive(_selectableMapDefs.Count > 1);
         }
 
@@ -376,27 +299,17 @@ namespace NorvinskMaps.UI.Controls
         [HideFromIl2Cpp]
         private bool MatchesFilter(MapDef m)
         {
-            if (string.IsNullOrEmpty(_nameFilter))
-            {
-                return true;
-            }
-
+            if (string.IsNullOrEmpty(_nameFilter)) return true;
             return m.MapInternalNames.Contains(_nameFilter);
         }
 
         private static string StripJsonComments(string json)
         {
             if (string.IsNullOrEmpty(json)) return json;
-
-            if (json[0] == '\uFEFF')
-            {
-                json = json.Substring(1);
-            }
+            if (json[0] == '\uFEFF') json = json.Substring(1);
 
             var sb = new System.Text.StringBuilder(json.Length);
-            bool inString = false;
-            bool inLineComment = false;
-            bool inBlockComment = false;
+            bool inString = false, inLineComment = false, inBlockComment = false;
 
             for (int i = 0; i < json.Length; i++)
             {
@@ -404,65 +317,30 @@ namespace NorvinskMaps.UI.Controls
 
                 if (inLineComment)
                 {
-                    if (c == '\n' || c == '\r')
-                    {
-                        inLineComment = false;
-                        sb.Append(c);
-                    }
+                    if (c == '\n' || c == '\r') { inLineComment = false; sb.Append(c); }
                     continue;
                 }
-
                 if (inBlockComment)
                 {
-                    if (c == '*' && i + 1 < json.Length && json[i + 1] == '/')
-                    {
-                        inBlockComment = false;
-                        i++;
-                    }
+                    if (c == '*' && i + 1 < json.Length && json[i + 1] == '/') { inBlockComment = false; i++; }
                     continue;
                 }
-
                 if (inString)
                 {
                     sb.Append(c);
-                    if (c == '\\' && i + 1 < json.Length)
-                    {
-                        sb.Append(json[++i]);
-                    }
-                    else if (c == '"')
-                    {
-                        inString = false;
-                    }
+                    if (c == '\\' && i + 1 < json.Length) sb.Append(json[++i]);
+                    else if (c == '"') inString = false;
                     continue;
                 }
-
-                if (c == '"')
-                {
-                    inString = true;
-                    sb.Append(c);
-                    continue;
-                }
-
+                if (c == '"') { inString = true; sb.Append(c); continue; }
                 if (c == '/' && i + 1 < json.Length)
                 {
                     char next = json[i + 1];
-                    if (next == '/')
-                    {
-                        inLineComment = true;
-                        i++;
-                        continue;
-                    }
-                    if (next == '*')
-                    {
-                        inBlockComment = true;
-                        i++;
-                        continue;
-                    }
+                    if (next == '/') { inLineComment = true; i++; continue; }
+                    if (next == '*') { inBlockComment = true; i++; continue; }
                 }
-
                 sb.Append(c);
             }
-
             return sb.ToString();
         }
     }

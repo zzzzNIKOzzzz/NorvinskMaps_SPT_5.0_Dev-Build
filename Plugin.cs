@@ -18,7 +18,7 @@ using UnityEngine;
 
 namespace NorvinskMaps
 {
-    [BepInPlugin("com.zzzNIKOzzz.NorvinskMaps", "NorvinskMaps", "1.0.0")]
+    [BepInPlugin("zzzNIKOzzz.NorvinskMaps", "NorvinskMaps", "1.2.0")]
     public class NorvinskMapsPlugin : BasePlugin
     {
         internal static NorvinskMapsPlugin Instance { get; private set; }
@@ -38,20 +38,32 @@ namespace NorvinskMaps
             Path = System.IO.Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty;
 
             Log.LogInfo("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
-            Log.LogInfo("NorvinskMaps by zzzNIKOzzz загружается... ... ... ... ...");
-            Log.LogInfo("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+            Log.LogInfo("_________NorvinskMaps от zzzNIKOzzz загружается_________");
 
             RegisterIl2CppTypes();
             RegisterColorConverter();
+            foreach (var f in typeof(EFT.Player).GetFields(
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.NonPublic))
+            {
+                var n = f.Name.ToLowerInvariant();
+                if (n.Contains("corpse"))
+                    NorvinskMapsPlugin.Log.LogInfo($"[FIELD] Player.{f.Name} : {f.FieldType}");
+                if (n.Contains("aggress"))
+                    NorvinskMapsPlugin.Log.LogInfo($"[FIELD] Player.{f.Name} : {f.FieldType}");
+            }
 
             Localization.DetectLanguage();
             Settings.Init(Config);
             ServerConfigLoader.CaptureMainThread();
             ServerConfigLoader.LoadAsync();
 
-            _harmony = new Harmony("com.zzzNIKOzzz.NorvinskMaps");
+            _harmony = new Harmony("zzzNIKOzzz.NorvinskMaps");
             _harmony.PatchAll(Assembly.GetExecutingAssembly());
+            Log.LogInfo("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
         }
+
 
         public override bool Unload()
         {
@@ -99,19 +111,17 @@ namespace NorvinskMaps
 
         private static void RegisterIl2CppTypes()
         {
+            QuestLocaleLoader.Load();
             ClassInjector.RegisterTypeInIl2Cpp<ModdedMapScreen>();
-
             ClassInjector.RegisterTypeInIl2Cpp<MapView>();
             ClassInjector.RegisterTypeInIl2Cpp<MapLayer>();
             ClassInjector.RegisterTypeInIl2Cpp<MapLabel>();
             ClassInjector.RegisterTypeInIl2Cpp<MapMarker>();
             ClassInjector.RegisterTypeInIl2Cpp<MapPeekComponent>();
-
             ClassInjector.RegisterTypeInIl2Cpp<CursorPositionText>();
             ClassInjector.RegisterTypeInIl2Cpp<PlayerPositionText>();
             ClassInjector.RegisterTypeInIl2Cpp<LevelSelectSlider>();
             ClassInjector.RegisterTypeInIl2Cpp<MapSelectDropdown>();
-
             ClassInjector.RegisterTypeInIl2Cpp<PlayerDotSpawner>();
         }
 
@@ -147,7 +157,7 @@ namespace NorvinskMaps
                 var go = UIUtils.CreateUIGameObject(battleUI.gameObject, "ModdedMapBlock");
                 if (go == null)
                 {
-                    NorvinskMapsPlugin.Log.LogError("[TryAttachToBattleUIScreen] UIUtils.CreateUIGameObject returned NULL");
+                    NorvinskMapsPlugin.Log.LogError("[TryAttachToBattleUIScreen] UIUtils.CreateUIGameObject вернул NULL");
                     return;
                 }
 
@@ -169,7 +179,7 @@ namespace NorvinskMaps
                 Map = go.AddComponent<ModdedMapScreen>();
                 if (Map == null)
                 {
-                    NorvinskMapsPlugin.Log.LogError("[TryAttachToBattleUIScreen] AddComponent<ModdedMapScreen> returned NULL");
+                    NorvinskMapsPlugin.Log.LogError("[TryAttachToBattleUIScreen] AddComponent<ModdedMapScreen> вернул NULL");
                     return;
                 }
             }

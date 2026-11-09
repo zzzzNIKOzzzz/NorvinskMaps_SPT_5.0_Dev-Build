@@ -223,7 +223,6 @@ namespace NorvinskMaps.UI.Components
                 BeginMiniMap();
         }
 
-        [HideFromIl2Cpp]
         internal void BeginMiniMap(bool playAnimation = true)
         {
             if (ShowingMiniMap) return;
@@ -235,12 +234,6 @@ namespace NorvinskMaps.UI.Components
             {
                 MapScreen.MapView.IsMiniMapActive = true;
                 MapScreen.MapView.RestoreBaseSizeDelta();
-
-                var savedZoomMini = MapScreen.MapView.ZoomMini;
-
-                MapScreen.MapView.ApplyMiniMapZoom();
-                MapScreen.MapView.ZoomMini = savedZoomMini;
-                MapScreen.MapView.ApplyZoomExternal(savedZoomMini);
             }
 
             if (transform != null)
@@ -251,22 +244,8 @@ namespace NorvinskMaps.UI.Components
 
             if (MapScreen != null)
                 MapScreen.Show(playAnimation);
-
-            try
-            {
-                var player = GameUtils.GetMainPlayer();
-                if (player != null && MapScreen?.MapView != null)
-                {
-                    var mapPosition = MathUtils.ConvertToMapPosition(player.Position);
-                    MapScreen.MapView.ShiftMapToCoordinate(mapPosition, 0f, true);
-                }
-            }
-            catch (System.Exception e)
-            {
-                NorvinskMapsPlugin.Log.LogError($"[BeginMiniMap] CenterOnPlayer: {e.Message}");
-            }
         }
-
+        
         [HideFromIl2Cpp]
         internal void ForceExitMiniMap()
         {

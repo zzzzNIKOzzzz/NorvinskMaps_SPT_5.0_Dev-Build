@@ -13,8 +13,58 @@ namespace NorvinskMaps.Utils
     public static class GameUtils
     {
         public static Profile PlayerProfile => GetMainPlayer()?.Profile;
+
+        private static readonly System.Reflection.MemberInfo _playerCorpseMember =
+    FindPlayerMember("Corpse", "corpse", "_corpse");
+        private static readonly System.Reflection.MemberInfo _playerLastAggressorMember =
+            FindPlayerMember("LastAggressor", "lastAggressor", "_lastAggressor");
+
+        private static System.Reflection.MemberInfo FindPlayerMember(params string[] names)
+        {
+            var t = typeof(Player);
+            var flags = System.Reflection.BindingFlags.Instance
+                      | System.Reflection.BindingFlags.Public
+                      | System.Reflection.BindingFlags.NonPublic;
+
+            foreach (var name in names)
+            {
+                var f = t.GetField(name, flags);
+                if (f != null) return f;
+
+                var p = t.GetProperty(name, flags);
+                if (p != null && p.GetGetMethod(true) != null) return p;
+            }
+
+            foreach (var m in t.GetMembers(flags))
+            {
+                var lower = m.Name.ToLowerInvariant();
+                foreach (var name in names)
+                {
+                    if (lower.Contains(name.ToLowerInvariant()))
+                        return m;
+                }
+            }
+            return null;
+        }
+
+        private static object ReadPlayerMember(System.Reflection.MemberInfo member, Player player)
+        {
+            if (member == null || player == null) return null;
+            try
+            {
+                if (member is System.Reflection.FieldInfo f) return f.GetValue(player);
+                if (member is System.Reflection.PropertyInfo p) return p.GetValue(player);
+            }
+            catch { }
+            return null;
+        }
+
         private static int _cachedIntelLevel = -1;
         private static float _intelCacheTime = -1f;
+
+        private static HashSet<MongoID> _wishlistCache;
+        private static float _wishlistCacheTime = -1f;
+        private const float WishlistCacheTtl = 2f;
 
         public static int GetIntelLevel()
         {
@@ -109,10 +159,7 @@ namespace NorvinskMaps.Utils
             return gameWorld?.MainPlayer;
         }
 
-        public static Profile GetPlayerProfile()
-        {
-            return PlayerProfile;
-        }
+        public static Profile GetPlayerProfile() => PlayerProfile;
 
         public static BTRView GetBTRView()
         {
@@ -128,21 +175,13 @@ namespace NorvinskMaps.Utils
 
         public static string BSGLocalized(this MongoID id)
         {
-            if (string.IsNullOrWhiteSpace(id))
-            {
-                return "";
-            }
-
+            if (string.IsNullOrWhiteSpace(id)) return "";
             return id.ToString().Localized();
         }
 
         public static string BSGLocalized(this string id)
         {
-            if (string.IsNullOrWhiteSpace(id))
-            {
-                return "";
-            }
-
+            if (string.IsNullOrWhiteSpace(id)) return "";
             return id.Localized();
         }
 
@@ -175,28 +214,54 @@ namespace NorvinskMaps.Utils
         {
             if (player == null) return false;
 
-            var mainPlayer = GetMainPlayer();
-            if (mainPlayer == null) return false;
+            if (_playerLastAggressorMember != null)
+            {
+                try
+                {
+                    var aggressor = ReadPlayerMember(_playerLastAggressorMember, player as Player) as IPlayer;
+                    if (aggressor != null)
+                    {
+                        var mainPlayer = GetMainPlayer();
+                        return mainPlayer != null && aggressor.ProfileId == mainPlayer.ProfileId;
+                    }
+                    return false;
+                }
+                catch { }
+            }
 
+            var main = GetMainPlayer();
+            if (main == null) return false;
             var victimId = player.ProfileId;
-            if (string.IsNullOrEmpty(victimId)) return false;
-
-            if (victimId == mainPlayer.ProfileId) return false;
-
-            return MainPlayerKilledProfile(mainPlayer, victimId);
+            if (string.IsNullOrEmpty(victimId) || victimId == main.ProfileId) return false;
+            return MainPlayerKilledProfile(main, victimId);
         }
 
         public static bool DidTeammateKill(this IPlayer player)
         {
             if (player == null) return false;
 
-            var mainPlayer = GetMainPlayer();
-            if (mainPlayer == null) return false;
+            if (_playerLastAggressorMember != null)
+            {
+                try
+                {
+                    var aggressor = ReadPlayerMember(_playerLastAggressorMember, player as Player) as IPlayer;
+                    if (aggressor == null || string.IsNullOrEmpty(aggressor.GroupId))
+                        return false;
 
+                    var mainPlayer = GetMainPlayer();
+                    if (mainPlayer == null) return false;
+
+                    return aggressor.ProfileId != mainPlayer.ProfileId
+                        && aggressor.GroupId == mainPlayer.GroupId;
+                }
+                catch { }
+            }
+
+            var main = GetMainPlayer();
+            if (main == null) return false;
             var victimId = player.ProfileId;
             if (string.IsNullOrEmpty(victimId)) return false;
-
-            var myGroupId = mainPlayer.GroupId;
+            var myGroupId = main.GroupId;
             if (string.IsNullOrEmpty(myGroupId)) return false;
 
             var gameWorld = Singleton<GameWorld>.Instance;
@@ -205,12 +270,10 @@ namespace NorvinskMaps.Utils
             foreach (var candidate in gameWorld.AllAlivePlayersList)
             {
                 if (candidate == null) continue;
-                if (candidate.ProfileId == mainPlayer.ProfileId) continue;
+                if (candidate.ProfileId == main.ProfileId) continue;
                 if (candidate.GroupId != myGroupId) continue;
-
                 if (MainPlayerKilledProfile(candidate, victimId)) return true;
             }
-
             return false;
         }
 
@@ -246,25 +309,25 @@ namespace NorvinskMaps.Utils
         {
             if (player == null) return false;
 
+            if (_playerCorpseMember != null)
+            {
+                try { return ReadPlayerMember(_playerCorpseMember, player) != null; }
+                catch { }
+            }
+
             try
             {
                 var hc = player.HealthController;
                 if (hc == null) return false;
                 if (hc.IsAlive) return false;
             }
-            catch
-            {
-                return false;
-            }
+            catch { return false; }
 
             try
             {
                 if (player.Profile?.Info == null) return false;
             }
-            catch
-            {
-                return false;
-            }
+            catch { return false; }
 
             return true;
         }
@@ -274,18 +337,27 @@ namespace NorvinskMaps.Utils
             return player.Profile.Info.MemberCategory == EMemberCategory.UnitTest;
         }
 
-        public static MongoID[] GetWishListItems()
+        public static HashSet<MongoID> GetWishListSet()
         {
+            var now = UnityEngine.Time.realtimeSinceStartup;
+            if (_wishlistCache != null && now - _wishlistCacheTime < WishlistCacheTtl)
+                return _wishlistCache;
+
+            var set = new HashSet<MongoID>();
             var profile = PlayerProfile;
-            if (profile == null) return Array.Empty<MongoID>();
+            if (profile != null)
+            {
+                var wishlist = profile.WishlistManager?.GetWishlist();
+                if (wishlist != null)
+                {
+                    foreach (var kvp in wishlist)
+                        set.Add(kvp.Key);
+                }
+            }
 
-            var wishlist = profile.WishlistManager?.GetWishlist();
-            if (wishlist == null) return Array.Empty<MongoID>();
-
-            var keys = new List<MongoID>();
-            foreach (var kvp in wishlist)
-                keys.Add(kvp.Key);
-            return keys.ToArray();
+            _wishlistCache = set;
+            _wishlistCacheTime = now;
+            return _wishlistCache;
         }
 
         public static bool ShouldShowMapInRaid()
@@ -303,21 +375,15 @@ namespace NorvinskMaps.Utils
                 return true;
             }
 
-            var isMapInInventory = false;
             var equipment = player.Inventory?.Equipment;
             if (equipment != null)
             {
-                var allItems = equipment.GetAllItems();
-                foreach (var item in allItems)
+                foreach (var item in equipment.GetAllItems())
                 {
-                    if (item.TemplateId == id)
-                    {
-                        isMapInInventory = true;
-                        break;
-                    }
+                    if (item.TemplateId == id) return true;
                 }
             }
-            return isMapInInventory;
+            return false;
         }
     }
 }
